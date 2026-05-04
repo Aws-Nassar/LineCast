@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QStyle,
     QTableWidget,
@@ -27,12 +28,31 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PyQt5.QtGui import QIcon
 
 from audio_handler import AudioDevice, AudioHandler
 
 
-CONFIG_PATH = Path(__file__).with_name("config.json")
+APP_NAME = "LineCast"
+APP_ID = "LineCast.Soundboard"
 AUDIO_FILTER = "Audio files (*.mp3 *.wav);;All files (*.*)"
+
+
+def _runtime_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _resource_path(relative_path: str) -> Path:
+    bundle_dir = getattr(sys, "_MEIPASS", None)
+    if bundle_dir:
+        return Path(bundle_dir) / relative_path
+    return Path(__file__).resolve().parent / relative_path
+
+
+CONFIG_PATH = _runtime_dir() / "config.json"
+APP_ICON_PATH = _resource_path("assets/linecast.ico")
 
 
 APP_STYLESHEET = """
@@ -122,6 +142,26 @@ QLineEdit:focus {
 QComboBox::drop-down {
     border: 0;
     width: 28px;
+}
+
+QComboBox QAbstractItemView {
+    background: #11151b;
+    border: 1px solid #334155;
+    color: #eef2f7;
+    outline: 0;
+    padding: 5px;
+    selection-background-color: #0ea5e9;
+    selection-color: #06121f;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 28px;
+    padding: 6px 10px;
+}
+
+QComboBox QAbstractItemView::item:hover {
+    background: #1f2937;
+    color: #f8fafc;
 }
 
 QPushButton {
@@ -253,11 +293,14 @@ class SoundPadWindow(QMainWindow):
             injection_device=self.config.get("injection_device"),
         )
 
-        self.setWindowTitle("SoundPad Clone")
-        self.resize(980, 620)
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
+        self.setMinimumSize(760, 520)
 
         self.monitor_combo = QComboBox()
         self.injection_combo = QComboBox()
+        self._setup_combo(self.monitor_combo)
+        self._setup_combo(self.injection_combo)
         self.monitor_slider = QSlider(Qt.Horizontal)
         self.injection_slider = QSlider(Qt.Horizontal)
         self.search_input = QLineEdit()
@@ -270,6 +313,7 @@ class SoundPadWindow(QMainWindow):
         self.injection_value_label = QLabel("85%")
 
         self._build_ui()
+        self._set_initial_window_geometry()
         self._connect_signals()
         self._load_devices()
         self._load_sound_table()
@@ -289,7 +333,7 @@ class SoundPadWindow(QMainWindow):
 
         title_block = QVBoxLayout()
         title_block.setSpacing(1)
-        title = QLabel("SoundPad Clone")
+        title = QLabel(APP_NAME)
         title.setObjectName("appTitle")
         title_block.addWidget(title)
 
@@ -305,12 +349,11 @@ class SoundPadWindow(QMainWindow):
         device_layout.setHorizontalSpacing(12)
         device_layout.setVerticalSpacing(11)
         device_layout.setColumnStretch(1, 1)
-        device_layout.setColumnStretch(4, 1)
 
         device_layout.addWidget(self._field_label("Monitor Device"), 0, 0)
-        device_layout.addWidget(self.monitor_combo, 0, 1)
-        device_layout.addWidget(self._field_label("Injection Device"), 0, 3)
-        device_layout.addWidget(self.injection_combo, 0, 4)
+        device_layout.addWidget(self.monitor_combo, 0, 1, 1, 2)
+        device_layout.addWidget(self._field_label("Injection Device"), 2, 0)
+        device_layout.addWidget(self.injection_combo, 2, 1, 1, 2)
 
         self._setup_slider(self.monitor_slider)
         self._setup_slider(self.injection_slider)
@@ -320,9 +363,9 @@ class SoundPadWindow(QMainWindow):
         device_layout.addWidget(self._field_label("Monitor Volume"), 1, 0)
         device_layout.addWidget(self.monitor_slider, 1, 1)
         device_layout.addWidget(self.monitor_value_label, 1, 2)
-        device_layout.addWidget(self._field_label("Injection Volume"), 1, 3)
-        device_layout.addWidget(self.injection_slider, 1, 4)
-        device_layout.addWidget(self.injection_value_label, 1, 5)
+        device_layout.addWidget(self._field_label("Injection Volume"), 3, 0)
+        device_layout.addWidget(self.injection_slider, 3, 1)
+        device_layout.addWidget(self.injection_value_label, 3, 2)
 
         root.addWidget(device_group)
 
@@ -376,6 +419,14 @@ class SoundPadWindow(QMainWindow):
         slider.setSingleStep(1)
         slider.setPageStep(5)
 
+    def _setup_combo(self, combo: QComboBox) -> None:
+        combo.setMinimumWidth(0)
+        combo.setMaxVisibleItems(8)
+        combo.setMinimumContentsLength(18)
+        combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        combo.view().setTextElideMode(Qt.ElideRight)
+
     def _field_label(self, text: str) -> QLabel:
         label = QLabel(text)
         label.setObjectName("fieldLabel")
@@ -391,6 +442,24 @@ class SoundPadWindow(QMainWindow):
 
         for button in (self.add_button, self.play_button, self.stop_button):
             button.setCursor(Qt.PointingHandCursor)
+
+    def _set_initial_window_geometry(self) -> None:
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.resize(980, 620)
+            return
+
+        available = screen.availableGeometry()
+        max_width = max(480, available.width() - 80)
+        max_height = max(360, available.height() - 80)
+        width = min(max_width, max(980, int(available.width() * 0.72)))
+        height = min(max_height, max(620, int(available.height() * 0.74)))
+
+        self.resize(width, height)
+
+        frame = self.frameGeometry()
+        frame.moveCenter(available.center())
+        self.move(frame.topLeft())
 
     def _load_devices(self) -> None:
         try:
@@ -602,8 +671,11 @@ class SoundPadWindow(QMainWindow):
 
 
 def main() -> int:
+    _set_windows_app_id()
+
     app = QApplication(sys.argv)
-    app.setApplicationName("SoundPad Clone")
+    app.setApplicationName(APP_NAME)
+    app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
     app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLESHEET)
 
@@ -611,6 +683,18 @@ def main() -> int:
     window.show()
 
     return app.exec_()
+
+
+def _set_windows_app_id() -> None:
+    if sys.platform != "win32":
+        return
+
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

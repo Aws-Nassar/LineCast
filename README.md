@@ -1,4 +1,4 @@
-# SoundPad Clone
+# LineCast
 
 A Windows soundboard prototype built with Python and PyQt5. It plays MP3/WAV clips to two output routes at the same time:
 
@@ -69,6 +69,22 @@ Then:
 
 Double-clicking a row also plays it.
 
+## Build The EXE
+
+From the project folder:
+
+```powershell
+.\tools\build_exe.ps1
+```
+
+The runnable app will be created at:
+
+```text
+dist\LineCast.exe
+```
+
+FFmpeg still needs to be installed on the PC for MP3 support.
+
 ## Backend Diagnostics
 
 List available output devices:
@@ -94,9 +110,11 @@ Use the device indexes printed by the diagnostics command.
 ## Project Structure
 
 ```text
-SoundPadCLone/
+LineCast/
   main.py            PyQt5 GUI and app-level logic
   audio_handler.py   Dual-output playback, normalization, device listing
+  assets/            App icon assets
+  tools/             Icon generation and packaging helpers
   config.json        Local device, volume, and sound library preferences
 ```
 
@@ -109,4 +127,3 @@ If MP3 files fail to load, install FFmpeg and make sure `ffmpeg.exe` is availabl
 ```powershell
 ffmpeg -version
 ```
-
