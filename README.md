@@ -14,12 +14,14 @@ This works with apps that can choose a microphone device, including Discord, Zoo
 ## Features
 
 - Modern dark PyQt5 desktop GUI
-- Sound library table with search
+- Sound library table with search, rename, path change, and delete controls
 - Add MP3/WAV files
+- Review slider with time display for previewing and seeking inside clips
 - Monitor, mic input, and injection device selectors
 - Simplified recommended device list, with optional advanced devices
-- Separate monitor, mic, and sound injection volume controls
+- Separate monitor, mic, video/system, and sound injection volume controls
 - Mic passthrough/mixing into a virtual cable
+- Optional WASAPI loopback device/app audio input for browser, YouTube, VLC, or local media audio
 - Soundboard playback through `sounddevice`
 - Clip normalization through `pydub`
 - Per-user preference saving under Windows AppData
@@ -36,7 +38,7 @@ This works with apps that can choose a microphone device, including Discord, Zoo
 Install Python packages:
 
 ```powershell
-python -m pip install PyQt5 sounddevice pydub numpy audioop-lts pyinstaller
+python -m pip install PyQt5 sounddevice pydub numpy audioop-lts pyinstaller PyAudioWPatch
 ```
 
 `audioop-lts` is needed on Python 3.13+ because Python removed the old standard-library `audioop` module.
@@ -56,6 +58,7 @@ Monitor Device = your headphones/speakers
 Mic Input = your real microphone
 Injection Device = CABLE Input (VB-Audio Virtual Cable)
 Mix mic into virtual input = ON
+Mix device/app audio into virtual input = OFF until you need it
 ```
 
 In Discord, Zoom, Meet, Slack, Teams, or another meeting app:
@@ -107,17 +110,43 @@ WDM-KS = low-level driver access, can be unstable or confusing
 1. Click `Add Sounds`.
 2. Choose one or more `.mp3` or `.wav` files.
 3. Select a sound in the table.
-4. Click `Play`.
+4. Use the `Review` slider to preview position and seek while a clip is playing.
+5. Click `Play`.
 
-Double-clicking a row also plays it.
+Double-clicking a row also plays it. Use `Rename`, `Change Path`, and `Delete` to manage the selected sound. `Delete` removes it from the LineCast library only; it does not delete the audio file from disk.
 
 Volume controls:
 
 ```text
 Monitor Volume = how loud the clip is for you
 Mic Volume = how loud your voice is in the virtual microphone
+Device/App Volume = how loud captured browser/video audio is for meeting apps
 Sound Injection Volume = how loud the clip is for meeting apps
 ```
+
+## Browser, YouTube, And Local Video Audio
+
+LineCast can mix audio playing on a Windows output device into the same virtual microphone. This uses WASAPI loopback through `PyAudioWPatch`, not `Stereo Mix`. It is useful when you need meeting participants to hear a YouTube video, browser tab, VLC video, or local media that you cannot download.
+
+Recommended safe setup:
+
+```text
+LineCast Mic Input = your real microphone
+LineCast Device/App Audio Source = Speakers (Realtek(R) Audio) -> device/app audio
+LineCast Injection Device = CABLE Input
+Meeting app Microphone/Input = CABLE Output
+Meeting app Speaker/Output = headphones or another device you are NOT capturing
+```
+
+Turn on:
+
+```text
+Mix device/app audio into virtual input = ON
+```
+
+If you want YouTube/browser audio captured, make that app play through the same output device selected as `Device/App Audio Source`. For example, if LineCast captures `Speakers (Realtek(R) Audio)`, set the browser output to `Speakers (Realtek(R) Audio)` in Windows volume mixer.
+
+Avoid capturing the meeting app's own speaker output. If Discord, Zoom, Meet, Slack, or Teams plays through the same device you are capturing, its sounds can loop back into the meeting microphone.
 
 ## Build The EXE
 
@@ -196,12 +225,20 @@ If the meeting app detects no mic input:
 5. Make sure the meeting app microphone is `CABLE Output`.
 6. Toggle `Mix mic into virtual input` off and on once.
 
+If the meeting app does not hear browser/video audio:
+
+1. Make sure `Mix device/app audio into virtual input` is ON.
+2. Select `Stereo Mix` or another real capture source as `Device/App Audio Source`.
+3. Make sure the browser or video player is outputting to the device that source captures.
+4. Try playing audio before starting the meeting-app mic test.
+
 If you hear a join/leave sound or meeting audio looping:
 
 1. In the meeting app, set speaker/output directly to your headphones.
 2. Do not use `Windows Default` while testing.
 3. Do not set the meeting app speaker/output to any cable device.
 4. Do not set LineCast Mic Input to `CABLE Output` or `Stereo Mix`.
+5. If video/system audio capture is enabled, make sure it is not capturing the meeting app speaker/output.
 
 If MP3 files fail to load, install FFmpeg and confirm it is on `PATH`:
 

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -23,8 +24,10 @@ from PyQt5.QtWidgets import (
     QListView,
     QMainWindow,
     QMessageBox,
+    QInputDialog,
     QPushButton,
     QSizePolicy,
+    QScrollArea,
     QSlider,
     QStyle,
     QTableWidget,
@@ -115,6 +118,11 @@ QLabel#statusChip {
 QLabel#volumeValue {
     color: #cbd5e1;
     min-width: 34px;
+}
+
+QLabel#reviewTime {
+    color: #cbd5e1;
+    min-width: 92px;
 }
 
 QGroupBox {
@@ -312,10 +320,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "monitor_device": None,
     "injection_device": None,
     "mic_device": None,
+    "external_audio_device": None,
     "monitor_volume": 85,
     "injection_volume": 85,
     "mic_volume": 85,
+    "external_audio_volume": 85,
     "mic_passthrough_enabled": True,
+    "external_audio_enabled": False,
     "show_advanced_devices": False,
     "sounds": [],
 }
@@ -335,35 +346,56 @@ class SoundPadWindow(QMainWindow):
             monitor_device=self.config.get("monitor_device"),
             injection_device=self.config.get("injection_device"),
             mic_device=self.config.get("mic_device"),
+            external_audio_device=self.config.get("external_audio_device"),
         )
         self.audio.set_mic_passthrough_enabled(
             bool(self.config.get("mic_passthrough_enabled", True))
         )
+        self.audio.set_external_audio_enabled(
+            bool(self.config.get("external_audio_enabled", False))
+        )
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
-        self.setMinimumSize(760, 520)
+        self.setMinimumSize(1040, 680)
 
         self.monitor_combo = QComboBox()
         self.injection_combo = QComboBox()
         self.mic_combo = QComboBox()
+        self.external_audio_combo = QComboBox()
         self._setup_combo(self.monitor_combo)
         self._setup_combo(self.injection_combo)
         self._setup_combo(self.mic_combo)
+        self._setup_combo(self.external_audio_combo)
         self.monitor_slider = QSlider(Qt.Horizontal)
         self.injection_slider = QSlider(Qt.Horizontal)
         self.mic_slider = QSlider(Qt.Horizontal)
+        self.external_audio_slider = QSlider(Qt.Horizontal)
         self.mic_passthrough_check = QCheckBox("Mix mic into virtual input")
+        self.external_audio_check = QCheckBox("Mix device/app audio into virtual input")
         self.advanced_devices_check = QCheckBox("Show advanced audio devices")
         self.search_input = QLineEdit()
         self.table = QTableWidget(0, 2)
         self.add_button = QPushButton("Add Sounds")
+        self.rename_button = QPushButton("Rename")
+        self.change_path_button = QPushButton("Change Path")
+        self.delete_button = QPushButton("Delete")
         self.play_button = QPushButton("Play")
         self.stop_button = QPushButton("Stop")
         self.status_label = QLabel("Ready")
         self.monitor_value_label = QLabel("85%")
         self.injection_value_label = QLabel("85%")
         self.mic_value_label = QLabel("85%")
+        self.external_audio_value_label = QLabel("85%")
+        self.review_slider = QSlider(Qt.Horizontal)
+        self.review_time_label = QLabel("00:00 / 00:00")
+        self.playback_timer = QTimer(self)
+        self._current_sound_path: Optional[Path] = None
+        self._current_duration_ms = 0
+        self._playback_start_offset_ms = 0
+        self._playback_started_at = 0
+        self._is_review_seeking = False
+        self._ignore_next_stopped = False
 
         self._build_ui()
         self._set_initial_window_geometry()
@@ -374,16 +406,21 @@ class SoundPadWindow(QMainWindow):
         QTimer.singleShot(250, self._enable_startup_mic_passthrough)
 
     def _build_ui(self) -> None:
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+
         central = QWidget()
         central.setObjectName("appRoot")
         root = QVBoxLayout(central)
-        root.setContentsMargins(20, 18, 20, 18)
-        root.setSpacing(14)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         top_bar = QFrame()
         top_bar.setObjectName("topBar")
         top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(16, 13, 16, 13)
+        top_layout.setContentsMargins(16, 12, 16, 12)
+        top_bar.setMinimumHeight(70)
 
         title_block = QVBoxLayout()
         title_block.setSpacing(1)
@@ -401,7 +438,7 @@ class SoundPadWindow(QMainWindow):
         device_group = QGroupBox("Audio Routing")
         device_layout = QGridLayout(device_group)
         device_layout.setHorizontalSpacing(12)
-        device_layout.setVerticalSpacing(11)
+        device_layout.setVerticalSpacing(8)
         device_layout.setColumnStretch(1, 1)
 
         device_layout.addWidget(self._field_label("Monitor Device"), 0, 0)
@@ -410,11 +447,18 @@ class SoundPadWindow(QMainWindow):
         self._setup_slider(self.monitor_slider)
         self._setup_slider(self.injection_slider)
         self._setup_slider(self.mic_slider)
+        self._setup_slider(self.external_audio_slider)
+        self._setup_review_slider()
         self.monitor_value_label.setObjectName("volumeValue")
         self.injection_value_label.setObjectName("volumeValue")
         self.mic_value_label.setObjectName("volumeValue")
+        self.external_audio_value_label.setObjectName("volumeValue")
+        self.review_time_label.setObjectName("reviewTime")
         self.mic_passthrough_check.setChecked(
             bool(self.config.get("mic_passthrough_enabled", True))
+        )
+        self.external_audio_check.setChecked(
+            bool(self.config.get("external_audio_enabled", False))
         )
         self.advanced_devices_check.setChecked(
             bool(self.config.get("show_advanced_devices", False))
@@ -429,12 +473,18 @@ class SoundPadWindow(QMainWindow):
         device_layout.addWidget(self.mic_slider, 3, 1)
         device_layout.addWidget(self.mic_value_label, 3, 2)
         device_layout.addWidget(self.mic_passthrough_check, 4, 1, 1, 2)
-        device_layout.addWidget(self._field_label("Injection Device"), 5, 0)
-        device_layout.addWidget(self.injection_combo, 5, 1, 1, 2)
-        device_layout.addWidget(self._field_label("Sound Injection Volume"), 6, 0)
-        device_layout.addWidget(self.injection_slider, 6, 1)
-        device_layout.addWidget(self.injection_value_label, 6, 2)
-        device_layout.addWidget(self.advanced_devices_check, 7, 1, 1, 2)
+        device_layout.addWidget(self._field_label("Device/App Audio Source"), 5, 0)
+        device_layout.addWidget(self.external_audio_combo, 5, 1, 1, 2)
+        device_layout.addWidget(self._field_label("Device/App Volume"), 6, 0)
+        device_layout.addWidget(self.external_audio_slider, 6, 1)
+        device_layout.addWidget(self.external_audio_value_label, 6, 2)
+        device_layout.addWidget(self.external_audio_check, 7, 1, 1, 2)
+        device_layout.addWidget(self._field_label("Injection Device"), 8, 0)
+        device_layout.addWidget(self.injection_combo, 8, 1, 1, 2)
+        device_layout.addWidget(self._field_label("Sound Injection Volume"), 9, 0)
+        device_layout.addWidget(self.injection_slider, 9, 1)
+        device_layout.addWidget(self.injection_value_label, 9, 2)
+        device_layout.addWidget(self.advanced_devices_check, 10, 1, 1, 2)
 
         root.addWidget(device_group)
 
@@ -442,16 +492,26 @@ class SoundPadWindow(QMainWindow):
         library_panel.setObjectName("libraryPanel")
         library_layout = QVBoxLayout(library_panel)
         library_layout.setContentsMargins(14, 14, 14, 14)
-        library_layout.setSpacing(12)
+        library_layout.setSpacing(9)
 
         controls = QHBoxLayout()
         controls.setSpacing(10)
         self.search_input.setPlaceholderText("Search sounds")
         controls.addWidget(self.search_input, 1)
         controls.addWidget(self.add_button)
+        controls.addWidget(self.rename_button)
+        controls.addWidget(self.change_path_button)
+        controls.addWidget(self.delete_button)
         controls.addWidget(self.play_button)
         controls.addWidget(self.stop_button)
         library_layout.addLayout(controls)
+
+        review_layout = QHBoxLayout()
+        review_layout.setSpacing(10)
+        review_layout.addWidget(self._field_label("Review"))
+        review_layout.addWidget(self.review_slider, 1)
+        review_layout.addWidget(self.review_time_label)
+        library_layout.addLayout(review_layout)
 
         self.table.setHorizontalHeaderLabels(["Sound", "Path"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -463,16 +523,22 @@ class SoundPadWindow(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
-        self.table.verticalHeader().setDefaultSectionSize(42)
+        self.table.verticalHeader().setDefaultSectionSize(38)
+        self.table.setMinimumHeight(170)
+        library_panel.setMinimumHeight(260)
         library_layout.addWidget(self.table, 1)
 
         root.addWidget(library_panel, 1)
 
-        self.setCentralWidget(central)
+        scroll_area.setWidget(central)
+        self.setCentralWidget(scroll_area)
         self._apply_button_icons()
 
     def _connect_signals(self) -> None:
         self.add_button.clicked.connect(self.add_sounds)
+        self.rename_button.clicked.connect(self.rename_selected_sound)
+        self.change_path_button.clicked.connect(self.change_selected_sound_path)
+        self.delete_button.clicked.connect(self.delete_selected_sound)
         self.play_button.clicked.connect(self.play_selected)
         self.stop_button.clicked.connect(self.stop_playback)
         self.search_input.textChanged.connect(self._filter_table)
@@ -480,17 +546,31 @@ class SoundPadWindow(QMainWindow):
         self.monitor_combo.currentIndexChanged.connect(self._device_selection_changed)
         self.injection_combo.currentIndexChanged.connect(self._device_selection_changed)
         self.mic_combo.currentIndexChanged.connect(self._device_selection_changed)
+        self.external_audio_combo.currentIndexChanged.connect(self._device_selection_changed)
         self.monitor_slider.valueChanged.connect(self._volume_changed)
         self.injection_slider.valueChanged.connect(self._volume_changed)
         self.mic_slider.valueChanged.connect(self._volume_changed)
+        self.external_audio_slider.valueChanged.connect(self._volume_changed)
         self.mic_passthrough_check.toggled.connect(self._mic_passthrough_changed)
+        self.external_audio_check.toggled.connect(self._external_audio_changed)
         self.advanced_devices_check.toggled.connect(self._advanced_devices_changed)
         self.playback_finished.connect(self._playback_finished)
+        self.playback_timer.timeout.connect(self._update_review_progress)
+        self.review_slider.sliderPressed.connect(self._review_slider_pressed)
+        self.review_slider.sliderMoved.connect(self._review_slider_moved)
+        self.review_slider.sliderReleased.connect(self._review_slider_released)
+        self.table.itemSelectionChanged.connect(self._sound_selection_changed)
 
     def _setup_slider(self, slider: QSlider) -> None:
         slider.setRange(0, 100)
         slider.setSingleStep(1)
         slider.setPageStep(5)
+
+    def _setup_review_slider(self) -> None:
+        self.review_slider.setRange(0, 0)
+        self.review_slider.setSingleStep(250)
+        self.review_slider.setPageStep(5000)
+        self.review_slider.setEnabled(False)
 
     def _setup_combo(self, combo: QComboBox) -> None:
         view = QListView(combo)
@@ -512,12 +592,24 @@ class SoundPadWindow(QMainWindow):
     def _apply_button_icons(self) -> None:
         style = self.style()
         self.add_button.setIcon(style.standardIcon(QStyle.SP_FileDialogNewFolder))
+        self.rename_button.setIcon(style.standardIcon(QStyle.SP_FileDialogDetailedView))
+        self.change_path_button.setIcon(style.standardIcon(QStyle.SP_DirOpenIcon))
+        trash_icon = getattr(QStyle, "SP_TrashIcon", QStyle.SP_DialogDiscardButton)
+        self.delete_button.setIcon(style.standardIcon(trash_icon))
         self.play_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
         self.stop_button.setIcon(style.standardIcon(QStyle.SP_MediaStop))
         self.play_button.setObjectName("primaryButton")
         self.stop_button.setObjectName("dangerButton")
+        self.delete_button.setObjectName("dangerButton")
 
-        for button in (self.add_button, self.play_button, self.stop_button):
+        for button in (
+            self.add_button,
+            self.rename_button,
+            self.change_path_button,
+            self.delete_button,
+            self.play_button,
+            self.stop_button,
+        ):
             button.setCursor(Qt.PointingHandCursor)
 
     def _set_initial_window_geometry(self) -> None:
@@ -529,8 +621,8 @@ class SoundPadWindow(QMainWindow):
         available = screen.availableGeometry()
         max_width = max(480, available.width() - 80)
         max_height = max(360, available.height() - 80)
-        width = min(max_width, max(980, int(available.width() * 0.72)))
-        height = min(max_height, max(620, int(available.height() * 0.74)))
+        width = min(max_width, max(1080, int(available.width() * 0.82)))
+        height = min(max_height, max(680, int(available.height() * 0.86)))
 
         self.resize(width, height)
 
@@ -548,7 +640,12 @@ class SoundPadWindow(QMainWindow):
             self.input_devices = []
 
         show_advanced = self.advanced_devices_check.isChecked()
-        combos = (self.monitor_combo, self.injection_combo, self.mic_combo)
+        combos = (
+            self.monitor_combo,
+            self.injection_combo,
+            self.mic_combo,
+            self.external_audio_combo,
+        )
         for combo in combos:
             combo.blockSignals(True)
 
@@ -556,6 +653,7 @@ class SoundPadWindow(QMainWindow):
             self.monitor_combo.clear()
             self.injection_combo.clear()
             self.mic_combo.clear()
+            self.external_audio_combo.clear()
 
             self.monitor_combo.addItem("Select headphones/speakers", None)
             self._populate_device_combo(
@@ -573,6 +671,18 @@ class SoundPadWindow(QMainWindow):
                 role="mic",
                 show_advanced=show_advanced,
                 selected_device=self.config.get("mic_device"),
+            )
+
+            self.external_audio_combo.addItem("Select output device to capture", None)
+            external_devices = AudioHandler.list_loopback_devices()
+            if not external_devices:
+                external_devices = self.input_devices
+            self._populate_device_combo(
+                self.external_audio_combo,
+                external_devices,
+                role="external",
+                show_advanced=show_advanced,
+                selected_device=self.config.get("external_audio_device"),
             )
 
             self.injection_combo.addItem("Select virtual cable input", None)
@@ -595,6 +705,10 @@ class SoundPadWindow(QMainWindow):
             self._select_combo_device(
                 self.mic_combo,
                 self.config.get("mic_device"),
+            )
+            self._select_combo_device(
+                self.external_audio_combo,
+                self.config.get("external_audio_device"),
             )
         finally:
             for combo in combos:
@@ -622,6 +736,9 @@ class SoundPadWindow(QMainWindow):
             self._add_device_item(combo, device, role=role, show_advanced=show_advanced)
 
         if selected_device is None or selected_device in shown_indexes:
+            return
+
+        if not show_advanced:
             return
 
         current = next(
@@ -677,11 +794,7 @@ class SoundPadWindow(QMainWindow):
             return False
 
         if role == "injection":
-            return (
-                "cable input" in name
-                and "16ch" not in name
-                and "vb-audio" in name
-            )
+            return self._is_virtual_cable_injection(name)
 
         if role == "mic":
             if self._is_virtual_audio_device(name):
@@ -689,6 +802,11 @@ class SoundPadWindow(QMainWindow):
             if "stereo mix" in name or "pc speaker" in name:
                 return False
             return any(token in name for token in ("microphone", "mic", "headset"))
+
+        if role == "external":
+            if device.hostapi == "Windows WASAPI Loopback":
+                return True
+            return "stereo mix" in name
 
         if role == "monitor":
             if self._is_virtual_audio_device(name):
@@ -714,16 +832,28 @@ class SoundPadWindow(QMainWindow):
             return f"{device.index}: {name} [{device.hostapi}]"
 
         if role == "injection":
-            return f"{name} -> meeting apps"
+            return f"{self._friendly_injection_name(name)} -> meeting apps"
+
+        if role == "external":
+            if device.hostapi == "Windows WASAPI Loopback":
+                return f"{self._friendly_loopback_name(name)} -> device/app audio"
+            if "stereo mix" in name.lower():
+                return f"{name} -> legacy capture"
 
         return name
 
     def _device_key(self, device: AudioDevice) -> str:
         name = self._clean_device_name(device.name).lower()
+        if self._is_virtual_cable_injection(name):
+            return "vb audio virtual cable injection"
         if "cable input" in name:
             return "cable input"
         if "cable output" in name:
             return "cable output"
+        if "loopback" in name:
+            return f"loopback {name}"
+        if "stereo mix" in name:
+            return "stereo mix"
         if "microphone array" in name:
             return "microphone array"
         if "headset" in name and "airpods pro" in name:
@@ -744,12 +874,18 @@ class SoundPadWindow(QMainWindow):
         }.get(device.hostapi, 4)
 
         role_rank = 2
-        if role == "injection" and "cable input" in name:
+        if role == "injection" and self._is_virtual_cable_injection(name):
             role_rank = 0
         elif role == "mic" and "microphone" in name:
             role_rank = 0
         elif role == "mic" and "headset" in name:
             role_rank = 1
+        elif role == "external" and "realtek" in name:
+            role_rank = 0
+        elif role == "external" and "loopback" in name:
+            role_rank = 1
+        elif role == "external" and "stereo mix" in name:
+            role_rank = 2
         elif role == "monitor" and "headphones" in name:
             role_rank = 0
         elif role == "monitor" and "speakers" in name:
@@ -776,6 +912,28 @@ class SoundPadWindow(QMainWindow):
             or "cable output" in lower_name
         )
 
+    def _is_virtual_cable_injection(self, lower_name: str) -> bool:
+        if "16ch" in lower_name or "16 ch" in lower_name:
+            return False
+        if "vb-audio point" in lower_name:
+            return False
+        return (
+            "cable input" in lower_name
+            or (
+                "vb-audio virtual cable" in lower_name
+                and "cable output" not in lower_name
+            )
+        )
+
+    def _friendly_injection_name(self, name: str) -> str:
+        lower_name = name.lower()
+        if "vb-audio virtual cable" in lower_name:
+            return "VB-Audio Virtual Cable Input"
+        return name
+
+    def _friendly_loopback_name(self, name: str) -> str:
+        return name.replace(" [Loopback]", "").replace("[Loopback]", "").strip()
+
     def _select_combo_device(
         self,
         combo: QComboBox,
@@ -793,33 +951,60 @@ class SoundPadWindow(QMainWindow):
     def _load_sound_table(self) -> None:
         self.table.setRowCount(0)
 
-        for sound_path in self.config.get("sounds", []):
-            self._append_sound_row(Path(sound_path))
+        for sound in self._sound_entries():
+            self._append_sound_row(Path(sound["path"]), sound.get("name"))
 
         self._filter_table(self.search_input.text())
+        self._select_first_visible_sound()
 
-    def _append_sound_row(self, path: Path) -> None:
+    def _sound_entries(self) -> list[dict[str, str]]:
+        entries: list[dict[str, str]] = []
+        for sound in self.config.get("sounds", []):
+            if isinstance(sound, dict):
+                path_text = str(sound.get("path", "")).strip()
+                if not path_text:
+                    continue
+                name = str(sound.get("name") or Path(path_text).stem).strip()
+            else:
+                path_text = str(sound).strip()
+                if not path_text:
+                    continue
+                name = Path(path_text).stem
+
+            entries.append({"name": name, "path": path_text})
+
+        return entries
+
+    def _save_sound_entries(self, entries: list[dict[str, str]]) -> None:
+        self.config["sounds"] = entries
+        self._save_config()
+
+    def _append_sound_row(self, path: Path, name: Optional[str] = None) -> None:
         row = self.table.rowCount()
         self.table.insertRow(row)
-        self.table.setItem(row, 0, QTableWidgetItem(path.stem))
+        self.table.setItem(row, 0, QTableWidgetItem(name or path.stem))
         self.table.setItem(row, 1, QTableWidgetItem(str(path)))
 
     def _apply_saved_volumes(self) -> None:
         monitor_volume = int(self.config.get("monitor_volume", 85))
         injection_volume = int(self.config.get("injection_volume", 85))
         mic_volume = int(self.config.get("mic_volume", 85))
+        external_audio_volume = int(self.config.get("external_audio_volume", 85))
 
         self.monitor_slider.blockSignals(True)
         self.injection_slider.blockSignals(True)
         self.mic_slider.blockSignals(True)
+        self.external_audio_slider.blockSignals(True)
         try:
             self.monitor_slider.setValue(monitor_volume)
             self.injection_slider.setValue(injection_volume)
             self.mic_slider.setValue(mic_volume)
+            self.external_audio_slider.setValue(external_audio_volume)
         finally:
             self.monitor_slider.blockSignals(False)
             self.injection_slider.blockSignals(False)
             self.mic_slider.blockSignals(False)
+            self.external_audio_slider.blockSignals(False)
 
         self._volume_changed()
         self._apply_mic_passthrough(show_errors=False)
@@ -834,7 +1019,8 @@ class SoundPadWindow(QMainWindow):
         if not files:
             return
 
-        known = {str(Path(path)) for path in self.config.get("sounds", [])}
+        entries = self._sound_entries()
+        known = {str(Path(sound["path"])) for sound in entries}
         added = 0
 
         for file_name in files:
@@ -843,26 +1029,133 @@ class SoundPadWindow(QMainWindow):
             if path_text in known:
                 continue
 
-            self.config.setdefault("sounds", []).append(path_text)
+            entries.append({"name": path.stem, "path": path_text})
             known.add(path_text)
             self._append_sound_row(path)
             added += 1
 
-        self._save_config()
+        self._save_sound_entries(entries)
         self._filter_table(self.search_input.text())
+        if added:
+            self._select_row(max(0, self.table.rowCount() - added))
+        else:
+            self._select_first_visible_sound()
         self.status_label.setText(f"Added {added} sound file(s)")
 
-    def play_selected(self) -> None:
+    def rename_selected_sound(self) -> None:
         row = self._selected_source_row()
         if row is None:
-            QMessageBox.information(self, "Play Sound", "Select a sound first.")
+            QMessageBox.information(self, "Rename Sound", "Select a sound first.")
             return
 
+        name_item = self.table.item(row, 0)
+        if name_item is None:
+            return
+
+        new_name, accepted = QInputDialog.getText(
+            self,
+            "Rename Sound",
+            "Sound name:",
+            text=name_item.text(),
+        )
+        new_name = new_name.strip()
+        if not accepted or not new_name:
+            return
+
+        entries = self._sound_entries()
+        if row >= len(entries):
+            return
+
+        entries[row]["name"] = new_name
+        name_item.setText(new_name)
+        self._save_sound_entries(entries)
+        self._filter_table(self.search_input.text())
+        self.status_label.setText(f"Renamed: {new_name}")
+
+    def change_selected_sound_path(self) -> None:
+        row = self._selected_source_row()
+        if row is None:
+            QMessageBox.information(self, "Change Path", "Select a sound first.")
+            return
+
+        entries = self._sound_entries()
+        if row >= len(entries):
+            return
+
+        old_path = Path(entries[row]["path"])
+        file_name, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Choose replacement sound file",
+            str(old_path.parent if old_path.parent.exists() else Path.home()),
+            AUDIO_FILTER,
+        )
+        if not file_name:
+            return
+
+        new_path = Path(file_name)
+        new_path_text = str(new_path)
+        duplicate = any(
+            index != row and str(Path(sound["path"])) == new_path_text
+            for index, sound in enumerate(entries)
+        )
+        if duplicate:
+            QMessageBox.warning(self, "Change Path", "That sound file is already in the library.")
+            return
+
+        entries[row]["path"] = new_path_text
         path_item = self.table.item(row, 1)
-        if path_item is None:
+        if path_item:
+            path_item.setText(new_path_text)
+
+        self._save_sound_entries(entries)
+        self._filter_table(self.search_input.text())
+        self._sound_selection_changed()
+        self.status_label.setText(f"Path updated: {new_path.name}")
+
+    def delete_selected_sound(self) -> None:
+        row = self._selected_source_row()
+        if row is None:
+            QMessageBox.information(self, "Delete Sound", "Select a sound first.")
             return
 
-        path = Path(path_item.text())
+        name_item = self.table.item(row, 0)
+        sound_name = name_item.text() if name_item else "selected sound"
+        confirm = QMessageBox.question(
+            self,
+            "Delete Sound",
+            f"Remove '{sound_name}' from the library?\n\nThe audio file itself will not be deleted.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        entries = self._sound_entries()
+        if row < len(entries):
+            removed = entries.pop(row)
+            if self._current_sound_path == Path(removed["path"]):
+                self.stop_playback()
+                self._reset_review_slider()
+
+        self.table.removeRow(row)
+        self._save_sound_entries(entries)
+        self._filter_table(self.search_input.text())
+        self.status_label.setText(f"Deleted: {sound_name}")
+
+    def play_selected(self) -> None:
+        path = self._selected_sound_path(show_message=True)
+        if path is None:
+            return
+
+        start_ms = 0
+        if self._current_sound_path == path:
+            start_ms = self.review_slider.value()
+            if self._current_duration_ms and start_ms >= self._current_duration_ms:
+                start_ms = 0
+
+        self._play_path(path, start_ms=start_ms)
+
+    def _play_path(self, path: Path, *, start_ms: int = 0) -> None:
         if not path.exists():
             QMessageBox.warning(self, "Missing File", f"File not found:\n{path}")
             return
@@ -886,24 +1179,76 @@ class SoundPadWindow(QMainWindow):
             )
             return
 
+        external_audio_device = self.external_audio_combo.currentData()
+        if self.external_audio_check.isChecked() and external_audio_device is None:
+            QMessageBox.warning(
+                self,
+                "Device/App Audio",
+                "Select a Device/App Audio Source or turn that mix off.",
+            )
+            return
+
         try:
+            duration_ms = self._duration_ms_for_path(path)
+            if duration_ms > 0:
+                start_ms = max(0, min(start_ms, duration_ms - 1))
+            else:
+                start_ms = 0
+
             self.audio.set_devices(
                 monitor_device=monitor_device,
                 injection_device=injection_device,
                 mic_device=mic_device,
+                external_audio_device=external_audio_device,
             )
             self.audio.set_volumes(
                 monitor=self.monitor_slider.value() / 100.0,
                 injection=self.injection_slider.value() / 100.0,
                 mic=self.mic_slider.value() / 100.0,
+                external_audio=self.external_audio_slider.value() / 100.0,
             )
             self._apply_mic_passthrough(show_errors=True)
-            self.audio.play_file(path, on_finished=self._emit_finished)
-            self.status_label.setText(f"Playing: {path.name}")
+            self.audio.play_file(
+                path,
+                start_seconds=start_ms / 1000.0,
+                on_finished=self._emit_finished,
+            )
+            self._start_review_progress(path, duration_ms, start_ms)
+            video_state = "video mix on" if self.external_audio_check.isChecked() else "video mix off"
+            self.status_label.setText(f"Playing sound: {path.name} ({video_state})")
         except Exception as exc:
+            if self.external_audio_check.isChecked() and self._is_invalid_external_source_error(exc):
+                self._disable_external_audio_mix()
+                self.status_label.setText("Device audio disabled; retrying sound")
+                self._play_path(path, start_ms=start_ms)
+                return
+
             QMessageBox.critical(self, "Playback Error", str(exc))
 
+    def _is_invalid_external_source_error(self, error: Exception) -> bool:
+        message = str(error).lower()
+        return (
+            "inputstream" in message
+            or "external_audio_device" in message
+            or "invalid device" in message
+            or "paerrorcode -9996" in message
+        )
+
+    def _disable_external_audio_mix(self) -> None:
+        self.external_audio_check.blockSignals(True)
+        try:
+            self.external_audio_check.setChecked(False)
+        finally:
+            self.external_audio_check.blockSignals(False)
+
+        self.config["external_audio_enabled"] = False
+        self.audio.set_external_audio_enabled(False)
+        self._save_config()
+
     def stop_playback(self) -> None:
+        self._set_review_position(self._current_review_position_ms())
+        self.playback_timer.stop()
+        self._ignore_next_stopped = self.audio.is_playing
         self.audio.stop()
         self.status_label.setText("Stopped")
 
@@ -911,17 +1256,165 @@ class SoundPadWindow(QMainWindow):
         self.playback_finished.emit(status, error)
 
     def _playback_finished(self, status: str, error: object) -> None:
+        if status == "stopped" and self._ignore_next_stopped:
+            self._ignore_next_stopped = False
+            return
+
+        self.playback_timer.stop()
+        self._ignore_next_stopped = False
         if error:
             self.status_label.setText(f"Playback {status}: {error}")
             return
 
+        if status == "finished" and self._current_duration_ms:
+            self._set_review_position(self._current_duration_ms)
+
         self.status_label.setText(f"Playback {status}")
+
+    def _selected_sound_path(self, *, show_message: bool = False) -> Optional[Path]:
+        row = self._selected_source_row()
+        if row is None:
+            row = self._select_first_visible_sound()
+
+        if row is None:
+            if show_message:
+                self.status_label.setText("Add or select a sound first")
+            return None
+
+        path_item = self.table.item(row, 1)
+        if path_item is None:
+            return None
+
+        return Path(path_item.text())
+
+    def _sound_selection_changed(self) -> None:
+        if self.audio.is_playing:
+            return
+
+        path = self._selected_sound_path()
+        if path is None:
+            self._reset_review_slider()
+            return
+
+        try:
+            duration_ms = self._duration_ms_for_path(path)
+        except Exception:
+            duration_ms = 0
+
+        self._current_sound_path = path
+        self._current_duration_ms = duration_ms
+        self.review_slider.setEnabled(duration_ms > 0)
+        self.review_slider.setRange(0, max(0, duration_ms))
+        self._set_review_position(0)
+
+    def _duration_ms_for_path(self, path: Path) -> int:
+        return max(0, int(AudioHandler.get_file_duration_seconds(path) * 1000))
+
+    def _start_review_progress(
+        self,
+        path: Path,
+        duration_ms: int,
+        start_ms: int,
+    ) -> None:
+        self._current_sound_path = path
+        self._current_duration_ms = duration_ms
+        self._playback_start_offset_ms = start_ms
+        self._playback_started_at = time.monotonic()
+        self.review_slider.setEnabled(duration_ms > 0)
+        self.review_slider.setRange(0, max(0, duration_ms))
+        self._set_review_position(start_ms)
+        self.playback_timer.start(100)
+
+    def _update_review_progress(self) -> None:
+        if self._is_review_seeking:
+            return
+
+        position_ms = self._current_review_position_ms()
+        self._set_review_position(position_ms)
+        if self._current_duration_ms and position_ms >= self._current_duration_ms:
+            self.playback_timer.stop()
+
+    def _current_review_position_ms(self) -> int:
+        if not self._current_duration_ms:
+            return 0
+
+        if not self.playback_timer.isActive():
+            return min(self.review_slider.value(), self._current_duration_ms)
+
+        elapsed_ms = int((time.monotonic() - self._playback_started_at) * 1000)
+        return min(self._playback_start_offset_ms + elapsed_ms, self._current_duration_ms)
+
+    def _review_slider_pressed(self) -> None:
+        self._is_review_seeking = True
+
+    def _review_slider_moved(self, value: int) -> None:
+        self._set_review_position(value)
+
+    def _review_slider_released(self) -> None:
+        self._is_review_seeking = False
+        if self._current_sound_path is None:
+            return
+
+        target_ms = self.review_slider.value()
+        self._set_review_position(target_ms)
+        if self.audio.is_playing:
+            self._ignore_next_stopped = True
+            self.audio.stop()
+            self._play_path(self._current_sound_path, start_ms=target_ms)
+
+    def _set_review_position(self, position_ms: int) -> None:
+        position_ms = max(0, min(position_ms, self._current_duration_ms))
+        self.review_slider.blockSignals(True)
+        try:
+            self.review_slider.setValue(position_ms)
+        finally:
+            self.review_slider.blockSignals(False)
+
+        self.review_time_label.setText(
+            f"{self._format_duration(position_ms)} / "
+            f"{self._format_duration(self._current_duration_ms)}"
+        )
+
+    def _reset_review_slider(self) -> None:
+        self._current_sound_path = None
+        self._current_duration_ms = 0
+        self._playback_start_offset_ms = 0
+        self._playback_started_at = 0
+        self.playback_timer.stop()
+        self.review_slider.setEnabled(False)
+        self.review_slider.setRange(0, 0)
+        self._set_review_position(0)
+
+    def _format_duration(self, milliseconds: int) -> str:
+        total_seconds = max(0, int(milliseconds / 1000))
+        minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
 
     def _selected_source_row(self) -> Optional[int]:
         ranges = self.table.selectedRanges()
         if not ranges:
             return None
         return ranges[0].topRow()
+
+    def _select_row(self, row: int) -> None:
+        if row < 0 or row >= self.table.rowCount():
+            return
+
+        self.table.selectRow(row)
+        self.table.scrollToItem(self.table.item(row, 0))
+
+    def _select_first_visible_sound(self) -> Optional[int]:
+        for row in range(self.table.rowCount()):
+            if not self.table.isRowHidden(row):
+                self._select_row(row)
+                return row
+
+        self.table.clearSelection()
+        self._reset_review_slider()
+        return None
 
     def _filter_table(self, text: str) -> None:
         needle = text.strip().lower()
@@ -936,14 +1429,20 @@ class SoundPadWindow(QMainWindow):
             )
             self.table.setRowHidden(row, bool(needle and needle not in haystack))
 
+        selected_row = self._selected_source_row()
+        if selected_row is None or self.table.isRowHidden(selected_row):
+            self._select_first_visible_sound()
+
     def _device_selection_changed(self) -> None:
         self.config["monitor_device"] = self.monitor_combo.currentData()
         self.config["injection_device"] = self.injection_combo.currentData()
         self.config["mic_device"] = self.mic_combo.currentData()
+        self.config["external_audio_device"] = self.external_audio_combo.currentData()
         self.audio.set_devices(
             monitor_device=self.config["monitor_device"],
             injection_device=self.config["injection_device"],
             mic_device=self.config["mic_device"],
+            external_audio_device=self.config["external_audio_device"],
         )
         self._save_config()
         self._apply_mic_passthrough(show_errors=False)
@@ -952,13 +1451,18 @@ class SoundPadWindow(QMainWindow):
         self.config["monitor_volume"] = self.monitor_slider.value()
         self.config["injection_volume"] = self.injection_slider.value()
         self.config["mic_volume"] = self.mic_slider.value()
+        self.config["external_audio_volume"] = self.external_audio_slider.value()
         self.monitor_value_label.setText(f"{self.monitor_slider.value()}%")
         self.injection_value_label.setText(f"{self.injection_slider.value()}%")
         self.mic_value_label.setText(f"{self.mic_slider.value()}%")
+        self.external_audio_value_label.setText(
+            f"{self.external_audio_slider.value()}%"
+        )
         self.audio.set_volumes(
             monitor=self.monitor_slider.value() / 100.0,
             injection=self.injection_slider.value() / 100.0,
             mic=self.mic_slider.value() / 100.0,
+            external_audio=self.external_audio_slider.value() / 100.0,
         )
         self._save_config()
 
@@ -967,6 +1471,38 @@ class SoundPadWindow(QMainWindow):
         self.audio.set_mic_passthrough_enabled(enabled)
         self._save_config()
         self._apply_mic_passthrough(show_errors=enabled)
+
+    def _external_audio_changed(self, enabled: bool) -> None:
+        if enabled and not self._selected_external_source_is_usable():
+            self._disable_external_audio_mix()
+            enabled = False
+
+        self.config["external_audio_enabled"] = enabled
+        self.audio.set_external_audio_enabled(enabled)
+        self._save_config()
+        self._apply_mic_passthrough(show_errors=enabled)
+
+    def _selected_external_source_is_usable(self) -> bool:
+        external_audio_device = self.external_audio_combo.currentData()
+        if external_audio_device is None:
+            return True
+
+        try:
+            AudioHandler.test_input_device_open(external_audio_device)
+            return True
+        except Exception as exc:
+            self.status_label.setText("Device audio unavailable")
+            QMessageBox.warning(
+                self,
+                "Device/App Audio",
+                "This Device/App Audio Source is visible in Windows, but LineCast "
+                "cannot open it as a live capture source.\n\n"
+                "Choose a WASAPI loopback source such as Speakers (Realtek) "
+                "instead of Stereo Mix. The device/app audio mix was turned off "
+                "so normal mic and soundboard playback can still work.\n\n"
+                f"Original error:\n{exc}",
+            )
+            return False
 
     def _advanced_devices_changed(self, enabled: bool) -> None:
         self.config["show_advanced_devices"] = enabled
@@ -981,29 +1517,57 @@ class SoundPadWindow(QMainWindow):
         if self._defer_mic_start and not show_errors:
             return
 
-        if not self.mic_passthrough_check.isChecked():
+        mic_enabled = self.mic_passthrough_check.isChecked()
+        external_enabled = self.external_audio_check.isChecked()
+        if not mic_enabled and not external_enabled:
             self.audio.stop_mic_passthrough()
+            if self.status_label.text() in {"Mic mix active", "Video mix active", "Mic + video mix active"}:
+                self.status_label.setText("Ready")
             return
 
-        if self.mic_combo.currentData() is None or self.injection_combo.currentData() is None:
+        if self.injection_combo.currentData() is None:
+            if show_errors:
+                QMessageBox.information(
+                    self,
+                    "Audio Routing",
+                    "Select an Injection Device first.",
+                )
+            return
+
+        if mic_enabled and self.mic_combo.currentData() is None:
             if show_errors:
                 QMessageBox.information(
                     self,
                     "Mic Mixing",
-                    "Select both a Mic Input and an Injection Device first.",
+                    "Select your real microphone as the Mic Input first.",
+                )
+            return
+
+        if external_enabled and self.external_audio_combo.currentData() is None:
+            if show_errors:
+                QMessageBox.information(
+                    self,
+                    "Device/App Audio",
+                    "Select a Device/App Audio Source or turn that mix off.",
                 )
             return
 
         try:
             self.audio.start_mic_passthrough()
-            if self.status_label.text() in {"Ready", "Stopped"}:
-                self.status_label.setText("Mic mix active")
+            if self.status_label.text() in {"Ready", "Stopped", "Mic mix active", "Video mix active", "Mic + video mix active"}:
+                if mic_enabled and external_enabled:
+                    self.status_label.setText("Mic + video mix active")
+                elif external_enabled:
+                    self.status_label.setText("Video mix active")
+                else:
+                    self.status_label.setText("Mic mix active")
         except Exception as exc:
             self.audio.stop_mic_passthrough()
             if show_errors:
-                QMessageBox.critical(self, "Mic Mixing Error", str(exc))
+                QMessageBox.critical(self, "Audio Routing Error", str(exc))
 
     def closeEvent(self, event: Any) -> None:
+        self.playback_timer.stop()
         self.audio.stop()
         self.audio.stop_mic_passthrough()
         self._save_config()
@@ -1062,3 +1626,5 @@ def _set_windows_app_id() -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
