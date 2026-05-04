@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -8,6 +9,7 @@ from typing import Any, Optional
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -17,6 +19,7 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListView,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -123,6 +126,7 @@ QLineEdit {
     background: #0f1720;
     border: 1px solid #303846;
     border-radius: 7px;
+    combobox-popup: 0;
     color: #f8fafc;
     min-height: 34px;
     padding: 0 10px;
@@ -162,6 +166,28 @@ QComboBox QAbstractItemView::item {
 QComboBox QAbstractItemView::item:hover {
     background: #1f2937;
     color: #f8fafc;
+}
+
+QCheckBox {
+    color: #cbd5e1;
+    spacing: 8px;
+}
+
+QCheckBox::indicator {
+    background: #0f1720;
+    border: 1px solid #303846;
+    border-radius: 5px;
+    height: 18px;
+    width: 18px;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #38bdf8;
+}
+
+QCheckBox::indicator:checked {
+    background: #22c55e;
+    border-color: #86efac;
 }
 
 QPushButton {
@@ -274,8 +300,12 @@ QScrollBar::sub-line:vertical {
 DEFAULT_CONFIG: dict[str, Any] = {
     "monitor_device": None,
     "injection_device": None,
+    "mic_device": None,
     "monitor_volume": 85,
     "injection_volume": 85,
+    "mic_volume": 85,
+    "mic_passthrough_enabled": True,
+    "show_advanced_devices": False,
     "sounds": [],
 }
 
@@ -287,10 +317,15 @@ class SoundPadWindow(QMainWindow):
         super().__init__()
 
         self.config = self._load_config()
-        self.devices: list[AudioDevice] = []
+        self.output_devices: list[AudioDevice] = []
+        self.input_devices: list[AudioDevice] = []
         self.audio = AudioHandler(
             monitor_device=self.config.get("monitor_device"),
             injection_device=self.config.get("injection_device"),
+            mic_device=self.config.get("mic_device"),
+        )
+        self.audio.set_mic_passthrough_enabled(
+            bool(self.config.get("mic_passthrough_enabled", True))
         )
 
         self.setWindowTitle(APP_NAME)
@@ -299,10 +334,15 @@ class SoundPadWindow(QMainWindow):
 
         self.monitor_combo = QComboBox()
         self.injection_combo = QComboBox()
+        self.mic_combo = QComboBox()
         self._setup_combo(self.monitor_combo)
         self._setup_combo(self.injection_combo)
+        self._setup_combo(self.mic_combo)
         self.monitor_slider = QSlider(Qt.Horizontal)
         self.injection_slider = QSlider(Qt.Horizontal)
+        self.mic_slider = QSlider(Qt.Horizontal)
+        self.mic_passthrough_check = QCheckBox("Mix mic into virtual input")
+        self.advanced_devices_check = QCheckBox("Show advanced audio devices")
         self.search_input = QLineEdit()
         self.table = QTableWidget(0, 2)
         self.add_button = QPushButton("Add Sounds")
@@ -311,6 +351,7 @@ class SoundPadWindow(QMainWindow):
         self.status_label = QLabel("Ready")
         self.monitor_value_label = QLabel("85%")
         self.injection_value_label = QLabel("85%")
+        self.mic_value_label = QLabel("85%")
 
         self._build_ui()
         self._set_initial_window_geometry()
@@ -352,20 +393,35 @@ class SoundPadWindow(QMainWindow):
 
         device_layout.addWidget(self._field_label("Monitor Device"), 0, 0)
         device_layout.addWidget(self.monitor_combo, 0, 1, 1, 2)
-        device_layout.addWidget(self._field_label("Injection Device"), 2, 0)
-        device_layout.addWidget(self.injection_combo, 2, 1, 1, 2)
 
         self._setup_slider(self.monitor_slider)
         self._setup_slider(self.injection_slider)
+        self._setup_slider(self.mic_slider)
         self.monitor_value_label.setObjectName("volumeValue")
         self.injection_value_label.setObjectName("volumeValue")
+        self.mic_value_label.setObjectName("volumeValue")
+        self.mic_passthrough_check.setChecked(
+            bool(self.config.get("mic_passthrough_enabled", True))
+        )
+        self.advanced_devices_check.setChecked(
+            bool(self.config.get("show_advanced_devices", False))
+        )
 
         device_layout.addWidget(self._field_label("Monitor Volume"), 1, 0)
         device_layout.addWidget(self.monitor_slider, 1, 1)
         device_layout.addWidget(self.monitor_value_label, 1, 2)
-        device_layout.addWidget(self._field_label("Injection Volume"), 3, 0)
-        device_layout.addWidget(self.injection_slider, 3, 1)
-        device_layout.addWidget(self.injection_value_label, 3, 2)
+        device_layout.addWidget(self._field_label("Mic Input"), 2, 0)
+        device_layout.addWidget(self.mic_combo, 2, 1, 1, 2)
+        device_layout.addWidget(self._field_label("Mic Volume"), 3, 0)
+        device_layout.addWidget(self.mic_slider, 3, 1)
+        device_layout.addWidget(self.mic_value_label, 3, 2)
+        device_layout.addWidget(self.mic_passthrough_check, 4, 1, 1, 2)
+        device_layout.addWidget(self._field_label("Injection Device"), 5, 0)
+        device_layout.addWidget(self.injection_combo, 5, 1, 1, 2)
+        device_layout.addWidget(self._field_label("Sound Injection Volume"), 6, 0)
+        device_layout.addWidget(self.injection_slider, 6, 1)
+        device_layout.addWidget(self.injection_value_label, 6, 2)
+        device_layout.addWidget(self.advanced_devices_check, 7, 1, 1, 2)
 
         root.addWidget(device_group)
 
@@ -410,8 +466,12 @@ class SoundPadWindow(QMainWindow):
         self.table.doubleClicked.connect(self.play_selected)
         self.monitor_combo.currentIndexChanged.connect(self._device_selection_changed)
         self.injection_combo.currentIndexChanged.connect(self._device_selection_changed)
+        self.mic_combo.currentIndexChanged.connect(self._device_selection_changed)
         self.monitor_slider.valueChanged.connect(self._volume_changed)
         self.injection_slider.valueChanged.connect(self._volume_changed)
+        self.mic_slider.valueChanged.connect(self._volume_changed)
+        self.mic_passthrough_check.toggled.connect(self._mic_passthrough_changed)
+        self.advanced_devices_check.toggled.connect(self._advanced_devices_changed)
         self.playback_finished.connect(self._playback_finished)
 
     def _setup_slider(self, slider: QSlider) -> None:
@@ -420,12 +480,16 @@ class SoundPadWindow(QMainWindow):
         slider.setPageStep(5)
 
     def _setup_combo(self, combo: QComboBox) -> None:
+        view = QListView(combo)
+        view.setUniformItemSizes(True)
+        view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        view.setTextElideMode(Qt.ElideRight)
+        combo.setView(view)
         combo.setMinimumWidth(0)
-        combo.setMaxVisibleItems(8)
+        combo.setMaxVisibleItems(9)
         combo.setMinimumContentsLength(18)
         combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        combo.view().setTextElideMode(Qt.ElideRight)
 
     def _field_label(self, text: str) -> QLabel:
         label = QLabel(text)
@@ -463,29 +527,241 @@ class SoundPadWindow(QMainWindow):
 
     def _load_devices(self) -> None:
         try:
-            self.devices = AudioHandler.list_output_devices()
+            self.output_devices = AudioHandler.list_output_devices()
+            self.input_devices = AudioHandler.list_input_devices()
         except Exception as exc:
             QMessageBox.critical(self, "Audio Devices", str(exc))
-            self.devices = []
+            self.output_devices = []
+            self.input_devices = []
 
-        self.monitor_combo.clear()
-        self.injection_combo.clear()
+        show_advanced = self.advanced_devices_check.isChecked()
+        combos = (self.monitor_combo, self.injection_combo, self.mic_combo)
+        for combo in combos:
+            combo.blockSignals(True)
 
-        for combo in (self.monitor_combo, self.injection_combo):
-            combo.addItem("Select device", None)
-            for device in self.devices:
-                label = f"{device.index}: {device.name} [{device.hostapi}]"
-                combo.addItem(label, device.index)
+        try:
+            self.monitor_combo.clear()
+            self.injection_combo.clear()
+            self.mic_combo.clear()
 
-        self._select_combo_device(
-            self.monitor_combo,
-            self.config.get("monitor_device"),
-        )
-        self._select_combo_device(
-            self.injection_combo,
-            self.config.get("injection_device"),
-        )
+            self.monitor_combo.addItem("Select headphones/speakers", None)
+            self._populate_device_combo(
+                self.monitor_combo,
+                self.output_devices,
+                role="monitor",
+                show_advanced=show_advanced,
+                selected_device=self.config.get("monitor_device"),
+            )
+
+            self.mic_combo.addItem("Select your real microphone", None)
+            self._populate_device_combo(
+                self.mic_combo,
+                self.input_devices,
+                role="mic",
+                show_advanced=show_advanced,
+                selected_device=self.config.get("mic_device"),
+            )
+
+            self.injection_combo.addItem("Select virtual cable input", None)
+            self._populate_device_combo(
+                self.injection_combo,
+                self.output_devices,
+                role="injection",
+                show_advanced=show_advanced,
+                selected_device=self.config.get("injection_device"),
+            )
+
+            self._select_combo_device(
+                self.monitor_combo,
+                self.config.get("monitor_device"),
+            )
+            self._select_combo_device(
+                self.injection_combo,
+                self.config.get("injection_device"),
+            )
+            self._select_combo_device(
+                self.mic_combo,
+                self.config.get("mic_device"),
+            )
+        finally:
+            for combo in combos:
+                combo.blockSignals(False)
+
         self._device_selection_changed()
+
+    def _populate_device_combo(
+        self,
+        combo: QComboBox,
+        devices: list[AudioDevice],
+        *,
+        role: str,
+        show_advanced: bool,
+        selected_device: Optional[int],
+    ) -> None:
+        shown_devices = (
+            devices
+            if show_advanced
+            else self._recommended_devices(devices, role=role)
+        )
+        shown_indexes = {device.index for device in shown_devices}
+
+        for device in shown_devices:
+            self._add_device_item(combo, device, role=role, show_advanced=show_advanced)
+
+        if selected_device is None or selected_device in shown_indexes:
+            return
+
+        current = next(
+            (device for device in devices if device.index == selected_device),
+            None,
+        )
+        if current:
+            self._add_device_item(combo, current, role=role, show_advanced=True)
+
+    def _add_device_item(
+        self,
+        combo: QComboBox,
+        device: AudioDevice,
+        *,
+        role: str,
+        show_advanced: bool,
+    ) -> None:
+        row = combo.count()
+        combo.addItem(
+            self._device_label(device, role=role, show_advanced=show_advanced),
+            device.index,
+        )
+        combo.setItemData(
+            row,
+            f"{device.index}: {device.name} [{device.hostapi}]",
+            Qt.ToolTipRole,
+        )
+
+    def _recommended_devices(
+        self,
+        devices: list[AudioDevice],
+        *,
+        role: str,
+    ) -> list[AudioDevice]:
+        filtered = [
+            device
+            for device in devices
+            if self._is_recommended_device(device, role=role)
+        ]
+        filtered.sort(key=lambda device: self._device_sort_key(device, role=role))
+
+        by_name: dict[str, AudioDevice] = {}
+        for device in filtered:
+            by_name.setdefault(self._device_key(device), device)
+
+        return list(by_name.values())
+
+    def _is_recommended_device(self, device: AudioDevice, *, role: str) -> bool:
+        name = self._clean_device_name(device.name).lower()
+        if self._is_system_wrapper(name):
+            return False
+        if re.search(r"\(\s*\)", name):
+            return False
+
+        if role == "injection":
+            return (
+                "cable input" in name
+                and "16ch" not in name
+                and "vb-audio" in name
+            )
+
+        if role == "mic":
+            if self._is_virtual_audio_device(name):
+                return False
+            if "stereo mix" in name or "pc speaker" in name:
+                return False
+            return any(token in name for token in ("microphone", "mic", "headset"))
+
+        if role == "monitor":
+            if self._is_virtual_audio_device(name):
+                return False
+            if name.startswith("speakers 1 ") or name.startswith("speakers 2 "):
+                return False
+            return any(
+                token in name
+                for token in ("headphones", "speakers", "headset")
+            )
+
+        return True
+
+    def _device_label(
+        self,
+        device: AudioDevice,
+        *,
+        role: str,
+        show_advanced: bool,
+    ) -> str:
+        name = self._clean_device_name(device.name)
+        if show_advanced:
+            return f"{device.index}: {name} [{device.hostapi}]"
+
+        if role == "injection":
+            return f"{name} -> meeting apps"
+
+        return name
+
+    def _device_key(self, device: AudioDevice) -> str:
+        name = self._clean_device_name(device.name).lower()
+        if "cable input" in name:
+            return "cable input"
+        if "cable output" in name:
+            return "cable output"
+        if "microphone array" in name:
+            return "microphone array"
+        if "headset" in name and "airpods pro" in name:
+            return "airpods headset"
+        if "headphones" in name and "airpods pro" in name:
+            return "airpods headphones"
+        if "speakers" in name and "realtek" in name:
+            return "realtek speakers"
+        return re.sub(r"\s+", " ", name).strip()
+
+    def _device_sort_key(self, device: AudioDevice, *, role: str) -> tuple[int, int, str]:
+        name = self._clean_device_name(device.name).lower()
+        hostapi_rank = {
+            "Windows WASAPI": 0,
+            "Windows DirectSound": 1,
+            "MME": 2,
+            "Windows WDM-KS": 3,
+        }.get(device.hostapi, 4)
+
+        role_rank = 2
+        if role == "injection" and "cable input" in name:
+            role_rank = 0
+        elif role == "mic" and "microphone" in name:
+            role_rank = 0
+        elif role == "mic" and "headset" in name:
+            role_rank = 1
+        elif role == "monitor" and "headphones" in name:
+            role_rank = 0
+        elif role == "monitor" and "speakers" in name:
+            role_rank = 1
+
+        return (role_rank, hostapi_rank, name)
+
+    def _clean_device_name(self, name: str) -> str:
+        text = re.sub(r"\s+", " ", name).strip()
+        if "@System32" in text and "AirPods Pro" in text:
+            return "Headset (AirPods Pro Hands-Free)"
+        return text
+
+    def _is_system_wrapper(self, lower_name: str) -> bool:
+        return (
+            "microsoft sound mapper" in lower_name
+            or lower_name.startswith("primary sound")
+        )
+
+    def _is_virtual_audio_device(self, lower_name: str) -> bool:
+        return (
+            "vb-audio" in lower_name
+            or "cable input" in lower_name
+            or "cable output" in lower_name
+        )
 
     def _select_combo_device(
         self,
@@ -518,17 +794,22 @@ class SoundPadWindow(QMainWindow):
     def _apply_saved_volumes(self) -> None:
         monitor_volume = int(self.config.get("monitor_volume", 85))
         injection_volume = int(self.config.get("injection_volume", 85))
+        mic_volume = int(self.config.get("mic_volume", 85))
 
         self.monitor_slider.blockSignals(True)
         self.injection_slider.blockSignals(True)
+        self.mic_slider.blockSignals(True)
         try:
             self.monitor_slider.setValue(monitor_volume)
             self.injection_slider.setValue(injection_volume)
+            self.mic_slider.setValue(mic_volume)
         finally:
             self.monitor_slider.blockSignals(False)
             self.injection_slider.blockSignals(False)
+            self.mic_slider.blockSignals(False)
 
         self._volume_changed()
+        self._apply_mic_passthrough(show_errors=False)
 
     def add_sounds(self) -> None:
         files, _selected_filter = QFileDialog.getOpenFileNames(
@@ -583,15 +864,27 @@ class SoundPadWindow(QMainWindow):
             )
             return
 
+        mic_device = self.mic_combo.currentData()
+        if self.mic_passthrough_check.isChecked() and mic_device is None:
+            QMessageBox.warning(
+                self,
+                "Mic Mixing",
+                "Select your real microphone as the Mic Input before playing.",
+            )
+            return
+
         try:
             self.audio.set_devices(
                 monitor_device=monitor_device,
                 injection_device=injection_device,
+                mic_device=mic_device,
             )
             self.audio.set_volumes(
                 monitor=self.monitor_slider.value() / 100.0,
                 injection=self.injection_slider.value() / 100.0,
+                mic=self.mic_slider.value() / 100.0,
             )
+            self._apply_mic_passthrough(show_errors=True)
             self.audio.play_file(path, on_finished=self._emit_finished)
             self.status_label.setText(f"Playing: {path.name}")
         except Exception as exc:
@@ -633,21 +926,66 @@ class SoundPadWindow(QMainWindow):
     def _device_selection_changed(self) -> None:
         self.config["monitor_device"] = self.monitor_combo.currentData()
         self.config["injection_device"] = self.injection_combo.currentData()
+        self.config["mic_device"] = self.mic_combo.currentData()
+        self.audio.set_devices(
+            monitor_device=self.config["monitor_device"],
+            injection_device=self.config["injection_device"],
+            mic_device=self.config["mic_device"],
+        )
         self._save_config()
+        self._apply_mic_passthrough(show_errors=False)
 
     def _volume_changed(self) -> None:
         self.config["monitor_volume"] = self.monitor_slider.value()
         self.config["injection_volume"] = self.injection_slider.value()
+        self.config["mic_volume"] = self.mic_slider.value()
         self.monitor_value_label.setText(f"{self.monitor_slider.value()}%")
         self.injection_value_label.setText(f"{self.injection_slider.value()}%")
+        self.mic_value_label.setText(f"{self.mic_slider.value()}%")
         self.audio.set_volumes(
             monitor=self.monitor_slider.value() / 100.0,
             injection=self.injection_slider.value() / 100.0,
+            mic=self.mic_slider.value() / 100.0,
         )
         self._save_config()
 
+    def _mic_passthrough_changed(self, enabled: bool) -> None:
+        self.config["mic_passthrough_enabled"] = enabled
+        self.audio.set_mic_passthrough_enabled(enabled)
+        self._save_config()
+        self._apply_mic_passthrough(show_errors=enabled)
+
+    def _advanced_devices_changed(self, enabled: bool) -> None:
+        self.config["show_advanced_devices"] = enabled
+        self._save_config()
+        self._load_devices()
+
+    def _apply_mic_passthrough(self, *, show_errors: bool) -> None:
+        if not self.mic_passthrough_check.isChecked():
+            self.audio.stop_mic_passthrough()
+            return
+
+        if self.mic_combo.currentData() is None or self.injection_combo.currentData() is None:
+            if show_errors:
+                QMessageBox.information(
+                    self,
+                    "Mic Mixing",
+                    "Select both a Mic Input and an Injection Device first.",
+                )
+            return
+
+        try:
+            self.audio.start_mic_passthrough()
+            if self.status_label.text() in {"Ready", "Stopped"}:
+                self.status_label.setText("Mic mix active")
+        except Exception as exc:
+            self.audio.stop_mic_passthrough()
+            if show_errors:
+                QMessageBox.critical(self, "Mic Mixing Error", str(exc))
+
     def closeEvent(self, event: Any) -> None:
         self.audio.stop()
+        self.audio.stop_mic_passthrough()
         self._save_config()
         super().closeEvent(event)
 

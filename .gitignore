@@ -19,8 +19,14 @@ dist/
 *.spec
 
 # Local runtime state
+config.json
+dist/config.json
 *.log
 *.tmp
+
+# Generated local artifacts
+*.wav.tmp
+*.mp3.tmp
 
 # IDE/editor files
 .idea/
@@ -32,4 +38,3 @@ dist/
 Thumbs.db
 Desktop.ini
 .DS_Store
-

@@ -1,93 +1,147 @@
 # LineCast
 
-A Windows soundboard prototype built with Python and PyQt5. It plays MP3/WAV clips to two output routes at the same time:
+LineCast is a Windows soundboard and mic mixer built with Python, PyQt5, and `sounddevice`. It lets you play MP3/WAV clips into meeting apps while still talking through your real microphone.
 
-- Monitor Device: your headphones or speakers
-- Injection Device: a virtual audio cable input used as your microphone source in voice chat apps
+The intended routing is:
 
-## Current Status
+```text
+Your real mic + LineCast sounds -> CABLE Input -> CABLE Output -> meeting app microphone
+Meeting app audio -> your headphones/speakers
+```
 
-Implemented:
+This works with apps that can choose a microphone device, including Discord, Zoom, Google Meet, Slack, Teams, and browser-based meeting apps.
 
-- Modern PyQt5 desktop GUI
+## Features
+
+- Modern dark PyQt5 desktop GUI
 - Sound library table with search
 - Add MP3/WAV files
-- Monitor and injection device selectors
-- Separate monitor and injection volume controls
-- Dual-output playback through `sounddevice`
-- Normalization through `pydub`
+- Monitor, mic input, and injection device selectors
+- Simplified recommended device list, with optional advanced devices
+- Separate monitor, mic, and sound injection volume controls
+- Mic passthrough/mixing into a virtual cable
+- Soundboard playback through `sounddevice`
+- Clip normalization through `pydub`
 - Local `config.json` preference saving
-
-Planned next:
-
-- Global hotkeys with `pynput`
-- Auto-PTT key press/release with `pyautogui`
-- Sound removal/editing from the library
-- Optional packaged `.exe` build
+- Custom app icon
+- Repeatable one-file `.exe` build script
 
 ## Requirements
 
 - Windows
 - Python 3.10 or newer
 - FFmpeg installed and available on `PATH` for MP3 support
-- A virtual audio cable driver such as VB-CABLE for microphone injection
+- A virtual audio cable driver, such as VB-CABLE
 
-Python packages:
+Install Python packages:
 
 ```powershell
-python -m pip install PyQt5 sounddevice pydub numpy audioop-lts
+python -m pip install PyQt5 sounddevice pydub numpy audioop-lts pyinstaller
 ```
 
-`audioop-lts` is needed on Python 3.13+ because the old standard-library `audioop` module was removed.
+`audioop-lts` is needed on Python 3.13+ because Python removed the old standard-library `audioop` module.
 
-## Virtual Cable Setup
+## Quick Start
 
-1. Install a virtual audio cable such as VB-CABLE.
-2. Restart Windows if the installer asks.
-3. Open your voice chat app.
-4. Set the app microphone/input device to the cable output device, usually named something like `CABLE Output`.
-5. In this app, choose the cable input/playback endpoint as the Injection Device, usually named something like `CABLE Input`.
-6. Choose your headphones as the Monitor Device.
-
-The exact names vary by driver and Windows audio backend.
-
-## Run The App
-
-From the project folder:
+Run from the project folder:
 
 ```powershell
 python main.py
 ```
 
-Then:
+Then choose:
 
-1. Select your Monitor Device.
-2. Select your Injection Device.
-3. Click Add Sounds and choose MP3 or WAV files.
-4. Select a sound in the table.
-5. Click Play.
+```text
+Monitor Device = your headphones/speakers
+Mic Input = your real microphone
+Injection Device = CABLE Input (VB-Audio Virtual Cable)
+Mix mic into virtual input = ON
+```
+
+In Discord, Zoom, Meet, Slack, Teams, or another meeting app:
+
+```text
+Microphone/Input = CABLE Output (VB-Audio Virtual Cable)
+Speaker/Output = your headphones/speakers
+```
+
+Keep LineCast open while using the meeting app. LineCast is acting as the mixer that forwards your real mic plus soundboard clips into the virtual microphone.
+
+## Device Setup
+
+LineCast shows a simplified recommended device list by default. Turn on `Show advanced audio devices` only if you need to see every Windows/PortAudio backend entry.
+
+For normal use, prefer `WASAPI` devices when available.
+
+Common device meanings:
+
+```text
+CABLE Input = where LineCast sends audio
+CABLE Output = what meeting apps use as the microphone
+Mic Input = your real microphone, never CABLE Output
+Monitor Device = where you personally hear the soundboard
+```
+
+Avoid these selections:
+
+```text
+LineCast Mic Input = CABLE Output
+LineCast Mic Input = Stereo Mix
+LineCast Injection Device = CABLE In 16ch
+Meeting app Speaker/Output = CABLE Input or CABLE Output
+```
+
+The duplicate-looking advanced device names come from Windows exposing the same hardware through different audio APIs:
+
+```text
+MME = old Windows audio
+DirectSound = older game/media audio
+WASAPI = modern Windows audio, usually best
+WDM-KS = low-level driver access, can be unstable or confusing
+```
+
+## Using Sounds
+
+1. Click `Add Sounds`.
+2. Choose one or more `.mp3` or `.wav` files.
+3. Select a sound in the table.
+4. Click `Play`.
 
 Double-clicking a row also plays it.
 
+Volume controls:
+
+```text
+Monitor Volume = how loud the clip is for you
+Mic Volume = how loud your voice is in the virtual microphone
+Sound Injection Volume = how loud the clip is for meeting apps
+```
+
 ## Build The EXE
 
-From the project folder:
+Generate the icon assets if needed:
+
+```powershell
+python tools\generate_icon.py
+```
+
+Build the runnable one-file app:
 
 ```powershell
 .\tools\build_exe.ps1
 ```
 
-The runnable app will be created at:
+The executable is created at:
 
 ```text
 dist\LineCast.exe
 ```
 
-FFmpeg still needs to be installed on the PC for MP3 support.
+FFmpeg still needs to be installed on the target PC for MP3 support.
 
 ## Backend Diagnostics
 
-List available output devices:
+List available input and output devices:
 
 ```powershell
 python audio_handler.py
@@ -102,28 +156,50 @@ python audio_handler.py --list-devices
 Test one clip without the GUI:
 
 ```powershell
-python audio_handler.py --file path\to\clip.wav --monitor 3 --injection 8
+python audio_handler.py --file path\to\clip.wav --monitor 19 --injection 14
 ```
 
-Use the device indexes printed by the diagnostics command.
+Use the device indexes printed by the diagnostics command. The numbers above are only an example.
+
+## Troubleshooting
+
+If the meeting app detects no mic input:
+
+1. Make sure LineCast is open.
+2. Make sure `Mix mic into virtual input` is ON.
+3. Make sure LineCast `Mic Input` is your real microphone.
+4. Make sure LineCast `Injection Device` is `CABLE Input`.
+5. Make sure the meeting app microphone is `CABLE Output`.
+6. Toggle `Mix mic into virtual input` off and on once.
+
+If you hear a join/leave sound or meeting audio looping:
+
+1. In the meeting app, set speaker/output directly to your headphones.
+2. Do not use `Windows Default` while testing.
+3. Do not set the meeting app speaker/output to any cable device.
+4. Do not set LineCast Mic Input to `CABLE Output` or `Stereo Mix`.
+
+If MP3 files fail to load, install FFmpeg and confirm it is on `PATH`:
+
+```powershell
+ffmpeg -version
+```
 
 ## Project Structure
 
 ```text
 LineCast/
-  main.py            PyQt5 GUI and app-level logic
-  audio_handler.py   Dual-output playback, normalization, device listing
-  assets/            App icon assets
-  tools/             Icon generation and packaging helpers
-  config.json        Local device, volume, and sound library preferences
+  main.py              PyQt5 GUI and app-level logic
+  audio_handler.py     Mic mixing, playback, normalization, device listing
+  assets/              App icon assets
+  tools/
+    build_exe.ps1      PyInstaller build script
+    generate_icon.py   Rebuilds app icon assets
+  config.json          Local device, volume, and sound library preferences
 ```
 
-## Notes
+## Planned Next
 
-Two separate Windows audio devices are not guaranteed to be sample-locked to each other. The app minimizes application-side delay by decoding the clip first and scheduling both streams together, but tiny drift can still happen if the devices use different hardware clocks.
-
-If MP3 files fail to load, install FFmpeg and make sure `ffmpeg.exe` is available from PowerShell:
-
-```powershell
-ffmpeg -version
-```
+- Global hotkeys with `pynput`
+- Auto-PTT key press/release with `pyautogui`
+- Sound removal/editing from the library
