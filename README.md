@@ -22,7 +22,7 @@ This works with apps that can choose a microphone device, including Discord, Zoo
 - Mic passthrough/mixing into a virtual cable
 - Soundboard playback through `sounddevice`
 - Clip normalization through `pydub`
-- Local `config.json` preference saving
+- Per-user preference saving under Windows AppData
 - Custom app icon
 - Repeatable one-file `.exe` build script
 
@@ -66,6 +66,8 @@ Speaker/Output = your headphones/speakers
 ```
 
 Keep LineCast open while using the meeting app. LineCast is acting as the mixer that forwards your real mic plus soundboard clips into the virtual microphone.
+
+LineCast remembers your selected devices, volumes, and sound list between runs.
 
 ## Device Setup
 
@@ -137,7 +139,29 @@ The executable is created at:
 dist\LineCast.exe
 ```
 
+The one-file build is easiest to share, but it starts slower because PyInstaller unpacks the app to a temporary folder every time it launches. For faster startup, build the folder version:
+
+```powershell
+.\tools\build_exe.ps1 -Mode OneDir
+```
+
+That creates:
+
+```text
+dist\LineCast\LineCast.exe
+```
+
+Ship the whole `dist\LineCast` folder if you use this mode.
+
 FFmpeg still needs to be installed on the target PC for MP3 support.
+
+The `.exe` stores user settings here:
+
+```text
+%APPDATA%\LineCast\config.json
+```
+
+That file is created automatically on each PC. Do not ship your personal `config.json` with the app.
 
 ## Backend Diagnostics
 
@@ -195,7 +219,7 @@ LineCast/
   tools/
     build_exe.ps1      PyInstaller build script
     generate_icon.py   Rebuilds app icon assets
-  config.json          Local device, volume, and sound library preferences
+  config.json          Optional legacy local config; new saves use AppData
 ```
 
 ## Planned Next

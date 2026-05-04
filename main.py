@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -54,7 +55,17 @@ def _resource_path(relative_path: str) -> Path:
     return Path(__file__).resolve().parent / relative_path
 
 
-CONFIG_PATH = _runtime_dir() / "config.json"
+def _config_path() -> Path:
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+        if base:
+            return Path(base) / APP_NAME / "config.json"
+
+    return _runtime_dir() / "config.json"
+
+
+CONFIG_PATH = _config_path()
+LEGACY_CONFIG_PATH = _runtime_dir() / "config.json"
 APP_ICON_PATH = _resource_path("assets/linecast.ico")
 
 
@@ -317,6 +328,7 @@ class SoundPadWindow(QMainWindow):
         super().__init__()
 
         self.config = self._load_config()
+        self._defer_mic_start = True
         self.output_devices: list[AudioDevice] = []
         self.input_devices: list[AudioDevice] = []
         self.audio = AudioHandler(
@@ -359,6 +371,7 @@ class SoundPadWindow(QMainWindow):
         self._load_devices()
         self._load_sound_table()
         self._apply_saved_volumes()
+        QTimer.singleShot(250, self._enable_startup_mic_passthrough)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -960,7 +973,14 @@ class SoundPadWindow(QMainWindow):
         self._save_config()
         self._load_devices()
 
+    def _enable_startup_mic_passthrough(self) -> None:
+        self._defer_mic_start = False
+        self._apply_mic_passthrough(show_errors=False)
+
     def _apply_mic_passthrough(self, *, show_errors: bool) -> None:
+        if self._defer_mic_start and not show_errors:
+            return
+
         if not self.mic_passthrough_check.isChecked():
             self.audio.stop_mic_passthrough()
             return
@@ -990,11 +1010,15 @@ class SoundPadWindow(QMainWindow):
         super().closeEvent(event)
 
     def _load_config(self) -> dict[str, Any]:
-        if not CONFIG_PATH.exists():
+        path = CONFIG_PATH
+        if not path.exists() and LEGACY_CONFIG_PATH != CONFIG_PATH:
+            path = LEGACY_CONFIG_PATH
+
+        if not path.exists():
             return dict(DEFAULT_CONFIG)
 
         try:
-            with CONFIG_PATH.open("r", encoding="utf-8") as file:
+            with path.open("r", encoding="utf-8") as file:
                 data = json.load(file)
         except (OSError, json.JSONDecodeError):
             return dict(DEFAULT_CONFIG)
@@ -1004,6 +1028,7 @@ class SoundPadWindow(QMainWindow):
         return config
 
     def _save_config(self) -> None:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with CONFIG_PATH.open("w", encoding="utf-8") as file:
             json.dump(self.config, file, indent=2)
 

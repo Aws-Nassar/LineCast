@@ -16,6 +16,8 @@ MP3 support in pydub requires FFmpeg to be installed and available on PATH.
 from __future__ import annotations
 
 import argparse
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -27,6 +29,7 @@ import sounddevice as sd
 
 try:
     from pydub import AudioSegment
+    import pydub.utils as pydub_utils
 except ModuleNotFoundError as exc:
     if exc.name in {"audioop", "pyaudioop"}:
         raise RuntimeError(
@@ -38,6 +41,32 @@ except ModuleNotFoundError as exc:
 
 PlaybackCallback = Callable[[str, Optional[BaseException]], None]
 UNSET = object()
+
+
+def _hide_ffmpeg_windows() -> None:
+    if sys.platform != "win32":
+        return
+
+    original_popen = subprocess.Popen
+
+    def hidden_popen(*args: object, **kwargs: object) -> subprocess.Popen:
+        startupinfo = kwargs.get("startupinfo")
+        if startupinfo is None:
+            startupinfo = subprocess.STARTUPINFO()
+            kwargs["startupinfo"] = startupinfo
+
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        kwargs["creationflags"] = (
+            int(kwargs.get("creationflags", 0)) | subprocess.CREATE_NO_WINDOW
+        )
+        return original_popen(*args, **kwargs)
+
+    subprocess.Popen = hidden_popen
+    pydub_utils.Popen = hidden_popen
+
+
+_hide_ffmpeg_windows()
 
 
 @dataclass(frozen=True)
