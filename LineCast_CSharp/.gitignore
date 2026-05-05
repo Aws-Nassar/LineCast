@@ -1,0 +1,20 @@
+# LineCast C# — .gitignore
+
+# Build output
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Publish output
+publish/
+dist/
+
+# Runtime config (don't commit personal device settings)
+config.json
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
