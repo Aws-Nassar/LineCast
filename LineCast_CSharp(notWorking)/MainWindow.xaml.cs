@@ -10,7 +10,6 @@ namespace LineCast;
 
 public partial class MainWindow : Window
 {
-    // ── State ────────────────────────────────────────────────────────────────
     private AppConfig _config;
     private readonly AudioHandler _audio = new();
 
@@ -28,14 +27,14 @@ public partial class MainWindow : Window
     private List<AudioDeviceInfo> _outputDevices  = new();
     private List<AudioDeviceInfo> _inputDevices   = new();
     private List<AudioDeviceInfo> _loopbackDevices = new();
-
-    // ── Init ─────────────────────────────────────────────────────────────────
+    private bool _deferMicStart = true;
 
     public MainWindow()
     {
         InitializeComponent();
 
         _config = AppConfig.Load();
+
         _reviewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _reviewTimer.Tick += OnReviewTimerTick;
 
@@ -48,6 +47,8 @@ public partial class MainWindow : Window
 
         Dispatcher.BeginInvoke(EnableStartupMicPassthrough, DispatcherPriority.ApplicationIdle);
     }
+
+    // ── Config → UI ──────────────────────────────────────────────────────────
 
     private void ApplyConfigToUI()
     {
@@ -64,7 +65,7 @@ public partial class MainWindow : Window
         _audio.SetExternalAudioEnabled(_config.ExternalAudioEnabled);
     }
 
-    // ── Device loading ───────────────────────────────────────────────────────
+    // ── Device loading ────────────────────────────────────────────────────────
 
     private void LoadDevices()
     {
@@ -113,15 +114,20 @@ public partial class MainWindow : Window
     {
         return all.Where(d =>
         {
-            var name = d.Name.ToLowerInvariant();
+            // Strip the "N: " prefix and " [Host API]" suffix for matching
+            var raw  = System.Text.RegularExpressions.Regex.Replace(d.Name, @"^\d+:\s*", "");
+            var n    = raw.ToLowerInvariant();
+            // Ignore secondary host-API duplicates (DirectSound/MME) in normal mode
+            if (d.HostApi != "Windows WASAPI" && d.HostApi != "Windows WASAPI Loopback")
+                return false;
             return role switch
             {
-                "monitor"   => (name.Contains("headphones") || name.Contains("speakers") || name.Contains("headset"))
-                               && !IsVirtualAudio(name),
-                "mic"       => (name.Contains("microphone") || name.Contains("mic") || name.Contains("headset"))
-                               && !IsVirtualAudio(name) && !name.Contains("stereo mix"),
-                "injection" => IsVirtualCableInput(name),
-                "external"  => d.HostApi.Contains("Loopback") || name.Contains("stereo mix"),
+                "monitor"   => (n.Contains("headphones") || n.Contains("speakers") || n.Contains("headset"))
+                               && !IsVirtualAudio(n),
+                "mic"       => (n.Contains("microphone") || n.Contains("mic") || n.Contains("headset"))
+                               && !IsVirtualAudio(n) && !n.Contains("stereo mix"),
+                "injection" => IsVirtualCableInput(n),
+                "external"  => d.HostApi == "Windows WASAPI Loopback" && !IsVirtualAudio(n),
                 _           => true
             };
         }).ToList();
@@ -144,7 +150,7 @@ public partial class MainWindow : Window
         combo.SelectedIndex = 0;
     }
 
-    // ── Sound table ──────────────────────────────────────────────────────────
+    // ── Sound table ───────────────────────────────────────────────────────────
 
     private void LoadSoundTable()
     {
@@ -162,20 +168,15 @@ public partial class MainWindow : Window
             : _sounds.Where(s =>
                 s.Name.ToLowerInvariant().Contains(needle) ||
                 s.Path.ToLowerInvariant().Contains(needle)).ToList();
-
         SoundTable.ItemsSource = _filteredSounds;
     }
 
     private SoundEntry? SelectedEntry() => SoundTable.SelectedItem as SoundEntry;
 
-    // ── Volume ───────────────────────────────────────────────────────────────
+    // ── Volume ────────────────────────────────────────────────────────────────
 
     private void ApplySavedVolumes()
     {
-        MonitorSlider.Value       = _config.MonitorVolume;
-        InjectionSlider.Value     = _config.InjectionVolume;
-        MicSlider.Value           = _config.MicVolume;
-        ExternalAudioSlider.Value = _config.ExternalAudioVolume;
         UpdateVolumeLabels();
         ApplyVolumesToAudio();
     }
@@ -197,11 +198,11 @@ public partial class MainWindow : Window
             externalAudio: (float)ExternalAudioSlider.Value / 100f);
     }
 
-    // ── Event handlers ───────────────────────────────────────────────────────
+    // ── Event handlers ────────────────────────────────────────────────────────
 
     private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (!IsLoaded) return;
+        if (_config == null || !IsLoaded) return;
         _config.MonitorVolume       = (int)MonitorSlider.Value;
         _config.InjectionVolume     = (int)InjectionSlider.Value;
         _config.MicVolume           = (int)MicSlider.Value;
@@ -213,6 +214,7 @@ public partial class MainWindow : Window
 
     private void OnDeviceSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_config == null) return;
         _config.MonitorDevice       = (MonitorCombo.SelectedItem as AudioDeviceInfo)?.Id;
         _config.InjectionDevice     = (InjectionCombo.SelectedItem as AudioDeviceInfo)?.Id;
         _config.MicDevice           = (MicCombo.SelectedItem as AudioDeviceInfo)?.Id;
@@ -229,31 +231,38 @@ public partial class MainWindow : Window
 
     private void OnMicPassthroughChanged(object sender, RoutedEventArgs e)
     {
+        if (_config == null) return;
         bool enabled = MicPassthroughCheck.IsChecked == true;
         _config.MicPassthroughEnabled = enabled;
         _audio.SetMicPassthroughEnabled(enabled);
         _config.Save();
-        ApplyMicPassthrough(showErrors: enabled);
+        // Only show errors if user manually toggled ON and devices are missing
+        ApplyMicPassthrough(showErrors: enabled && _deferMicStart == false);
     }
 
     private void OnExternalAudioChanged(object sender, RoutedEventArgs e)
     {
+        if (_config == null) return;
         bool enabled = ExternalAudioCheck.IsChecked == true;
         _config.ExternalAudioEnabled = enabled;
         _audio.SetExternalAudioEnabled(enabled);
         _config.Save();
-        ApplyMicPassthrough(showErrors: enabled);
+        ApplyMicPassthrough(showErrors: enabled && _deferMicStart == false);
     }
 
     private void OnAdvancedDevicesChanged(object sender, RoutedEventArgs e)
     {
+        if (_config == null) return;
         _config.ShowAdvancedDevices = AdvancedDevicesCheck.IsChecked == true;
         _config.Save();
         LoadDevices();
     }
 
     private void OnSearchChanged(object sender, TextChangedEventArgs e)
-        => FilterTable(SearchBox.Text);
+    {
+        if (_config == null) return;
+        FilterTable(SearchBox.Text);
+    }
 
     private void OnAddSounds(object sender, RoutedEventArgs e)
     {
@@ -303,8 +312,8 @@ public partial class MainWindow : Window
 
         var dlg = new OpenFileDialog
         {
-            Title            = "Choose replacement sound file",
-            Filter           = "Audio files (*.mp3;*.wav)|*.mp3;*.wav|All files (*.*)|*.*",
+            Title = "Choose replacement sound file",
+            Filter = "Audio files (*.mp3;*.wav)|*.mp3;*.wav|All files (*.*)|*.*",
             InitialDirectory = File.Exists(entry.Path)
                 ? Path.GetDirectoryName(entry.Path)
                 : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
@@ -343,8 +352,8 @@ public partial class MainWindow : Window
         StatusLabel.Text = $"Deleted: {entry.Name}";
     }
 
-    private void OnPlay(object sender, RoutedEventArgs e) => PlaySelected();
-    private void OnStop(object sender, RoutedEventArgs e) => StopPlayback();
+    private void OnPlay(object sender, RoutedEventArgs e)  => PlaySelected();
+    private void OnStop(object sender, RoutedEventArgs e)  => StopPlayback();
     private void OnTableDoubleClick(object sender, MouseButtonEventArgs e) => PlaySelected();
 
     private void OnTableSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -365,7 +374,7 @@ public partial class MainWindow : Window
         catch { ResetReviewSlider(); }
     }
 
-    // ── Playback ─────────────────────────────────────────────────────────────
+    // ── Playback ──────────────────────────────────────────────────────────────
 
     private void PlaySelected()
     {
@@ -379,7 +388,6 @@ public partial class MainWindow : Window
             if (_currentDurationSec > 0 && startSec >= _currentDurationSec)
                 startSec = 0;
         }
-
         PlayPath(entry.Path, startSec);
     }
 
@@ -411,9 +419,7 @@ public partial class MainWindow : Window
             startSec = Math.Max(0, Math.Min(startSec, Math.Max(0, dur - 0.001)));
 
             _audio.PlayFile(path, (float)startSec, (status, err) =>
-            {
-                Dispatcher.Invoke(() => OnPlaybackFinished(status, err));
-            });
+                Dispatcher.Invoke(() => OnPlaybackFinished(status, err)));
 
             StartReviewProgress(path, dur, startSec);
             StatusLabel.Text = $"Playing: {Path.GetFileName(path)}";
@@ -439,7 +445,6 @@ public partial class MainWindow : Window
         if (status == "stopped" && _ignoreNextStopped) { _ignoreNextStopped = false; return; }
         _reviewTimer.Stop();
         _ignoreNextStopped = false;
-
         if (error != null) { StatusLabel.Text = $"Playback {status}: {error.Message}"; return; }
         if (status == "finished" && _currentDurationSec > 0)
             SetReviewPosition(_currentDurationSec);
@@ -478,7 +483,10 @@ public partial class MainWindow : Window
     }
 
     private void OnReviewSliderPressed(object sender, MouseButtonEventArgs e)
-        => _isReviewSeeking = true;
+    {
+        _isReviewSeeking = true;
+        e.Handled = false; // let the slider still move
+    }
 
     private void OnReviewSliderReleased(object sender, MouseButtonEventArgs e)
     {
@@ -522,9 +530,7 @@ public partial class MainWindow : Window
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
     }
 
-    // ── Mic passthrough helpers ───────────────────────────────────────────────
-
-    private bool _deferMicStart = true;
+    // ── Mic passthrough ───────────────────────────────────────────────────────
 
     private void EnableStartupMicPassthrough()
     {
@@ -532,9 +538,20 @@ public partial class MainWindow : Window
         ApplyMicPassthrough(showErrors: false);
     }
 
+    private void SyncAudioDevices()
+    {
+        // Always keep _audio in sync with latest config before any passthrough call
+        _audio.MonitorDeviceId       = _config.MonitorDevice;
+        _audio.InjectionDeviceId     = _config.InjectionDevice;
+        _audio.MicDeviceId           = _config.MicDevice;
+        _audio.ExternalAudioDeviceId = _config.ExternalAudioDevice;
+    }
+
     private void ApplyMicPassthrough(bool showErrors)
     {
         if (_deferMicStart && !showErrors) return;
+
+        SyncAudioDevices();
 
         bool micEnabled      = MicPassthroughCheck.IsChecked == true;
         bool externalEnabled = ExternalAudioCheck.IsChecked  == true;
@@ -547,6 +564,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Silently skip if devices aren't chosen yet (startup case)
         if (string.IsNullOrEmpty(_config.InjectionDevice))
         {
             if (showErrors) MessageBox.Show("Select an Injection Device first.", "Audio Routing");
@@ -555,6 +573,11 @@ public partial class MainWindow : Window
         if (micEnabled && string.IsNullOrEmpty(_config.MicDevice))
         {
             if (showErrors) MessageBox.Show("Select your real microphone as the Mic Input first.", "Mic Mixing");
+            return;
+        }
+        if (externalEnabled && string.IsNullOrEmpty(_config.ExternalAudioDevice))
+        {
+            if (showErrors) MessageBox.Show("Select a Device/App Audio Source first.", "Audio Routing");
             return;
         }
 
@@ -580,7 +603,7 @@ public partial class MainWindow : Window
         }
     }
 
-    // ── Window closing ────────────────────────────────────────────────────────
+    // ── Window close ──────────────────────────────────────────────────────────
 
     protected override void OnClosed(EventArgs e)
     {

@@ -8,7 +8,14 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // Set Windows App User Model ID for taskbar grouping
+        // Suppress unhandled exceptions from crashing silently
+        DispatcherUnhandledException += (_, ex) =>
+        {
+            MessageBox.Show(ex.Exception.ToString(), "LineCast Error",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            ex.Handled = true;
+        };
+
         try
         {
             SetCurrentProcessExplicitAppUserModelID("LineCast.Soundboard");
@@ -21,6 +28,7 @@ public partial class App : Application
 
     [System.Runtime.InteropServices.DllImport("shell32.dll", SetLastError = true)]
     private static extern void SetCurrentProcessExplicitAppUserModelID(
-        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)]
+        [System.Runtime.InteropServices.MarshalAs(
+            System.Runtime.InteropServices.UnmanagedType.LPWStr)]
         string appId);
 }

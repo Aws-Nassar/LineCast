@@ -2,12 +2,10 @@ using System.IO;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
+using NAudio.MediaFoundation;
 
 namespace LineCast;
 
-/// <summary>
-/// Audio device descriptor — equivalent to the Python AudioDevice dataclass.
-/// </summary>
 public record AudioDeviceInfo(
     string Id,
     string Name,
@@ -15,18 +13,10 @@ public record AudioDeviceInfo(
     bool IsInput,
     bool IsOutput);
 
-/// <summary>
-/// Callback signature for playback completion.
-/// </summary>
 public delegate void PlaybackFinishedCallback(string status, Exception? error);
 
-/// <summary>
-/// Core audio engine. Mirrors AudioHandler from audio_handler.py.
-/// Uses NAudio (WasapiOut / WasapiCapture) instead of sounddevice/pydub.
-/// </summary>
 public sealed class AudioHandler : IDisposable
 {
-    // ── Configuration ────────────────────────────────────────────────────────
     public string? MonitorDeviceId { get; set; }
     public string? InjectionDeviceId { get; set; }
     public string? MicDeviceId { get; set; }
@@ -40,7 +30,6 @@ public sealed class AudioHandler : IDisposable
     public bool MicPassthroughEnabled { get; private set; }
     public bool ExternalAudioEnabled { get; private set; }
 
-    // ── State ────────────────────────────────────────────────────────────────
     private readonly object _lock = new();
     private ActivePlayback? _active;
     private MicPassthroughMixer? _micMixer;
@@ -52,41 +41,97 @@ public sealed class AudioHandler : IDisposable
 
     // ── Device enumeration ───────────────────────────────────────────────────
 
+    /// <summary>
+    /// Returns ALL output endpoints across every host API, numbered like the
+    /// Python version: "0: Speakers (Realtek) [Windows WASAPI]"
+    /// </summary>
     public static List<AudioDeviceInfo> ListOutputDevices()
     {
-        var enumerator = new MMDeviceEnumerator();
         var result = new List<AudioDeviceInfo>();
-        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+        int index = 0;
+
+        // WASAPI (primary)
+        var enumerator = new MMDeviceEnumerator();
+        foreach (var d in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
         {
-            result.Add(new AudioDeviceInfo(device.ID, device.FriendlyName, "WASAPI", false, true));
+            result.Add(new AudioDeviceInfo(
+                d.ID,
+                $"{index}: {d.FriendlyName} [Windows WASAPI]",
+                "Windows WASAPI",
+                false, true));
+            index++;
         }
+
+        // DirectSound
+        foreach (var ds in DirectSoundOut.Devices)
+        {
+            result.Add(new AudioDeviceInfo(
+                $"ds:{ds.Guid}",
+                $"{index}: {ds.Description} [Windows DirectSound]",
+                "Windows DirectSound",
+                false, true));
+            index++;
+        }
+
         return result;
     }
 
+    /// <summary>
+    /// Returns ALL input endpoints, numbered across host APIs.
+    /// </summary>
     public static List<AudioDeviceInfo> ListInputDevices()
     {
-        var enumerator = new MMDeviceEnumerator();
         var result = new List<AudioDeviceInfo>();
-        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+        int index = 0;
+
+        var enumerator = new MMDeviceEnumerator();
+        foreach (var d in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
         {
-            result.Add(new AudioDeviceInfo(device.ID, device.FriendlyName, "WASAPI", true, false));
+            result.Add(new AudioDeviceInfo(
+                d.ID,
+                $"{index}: {d.FriendlyName} [Windows WASAPI]",
+                "Windows WASAPI",
+                true, false));
+            index++;
         }
+
+        // WaveIn devices (MME equivalent)
+        int waveInCount = WaveIn.DeviceCount;
+        for (int i = 0; i < waveInCount; i++)
+        {
+            var caps = WaveIn.GetCapabilities(i);
+            result.Add(new AudioDeviceInfo(
+                $"wavein:{i}",
+                $"{index}: {caps.ProductName} [MME]",
+                "MME",
+                true, false));
+            index++;
+        }
+
         return result;
     }
 
+    /// <summary>
+    /// Returns loopback-capable render endpoints (for capturing system audio).
+    /// In advanced mode these are all render devices; in normal mode only real
+    /// audio outputs (not virtual cables).
+    /// </summary>
     public static List<AudioDeviceInfo> ListLoopbackDevices()
     {
         var enumerator = new MMDeviceEnumerator();
         var result = new List<AudioDeviceInfo>();
-        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+        int index = 0;
+
+        foreach (var d in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
         {
-            var name = device.FriendlyName;
-            var nameLower = name.ToLowerInvariant();
-            if (nameLower.Contains("vb-audio") || nameLower.Contains("cable"))
-                continue;
             result.Add(new AudioDeviceInfo(
-                $"loopback:{device.ID}", name, "WASAPI Loopback", true, false));
+                $"loopback:{d.ID}",
+                $"{index}: {d.FriendlyName} [Windows WASAPI Loopback]",
+                "Windows WASAPI Loopback",
+                true, false));
+            index++;
         }
+
         return result;
     }
 
@@ -127,7 +172,7 @@ public sealed class AudioHandler : IDisposable
         if (wasRunning) { StopMicPassthrough(); StartMicPassthrough(); }
     }
 
-    // ── Mic passthrough ──────────────────────────────────────────────────────
+    // ── Mic/loopback passthrough ─────────────────────────────────────────────
 
     public void StartMicPassthrough()
     {
@@ -143,23 +188,25 @@ public sealed class AudioHandler : IDisposable
         lock (_lock) existing = _micMixer;
 
         if (existing != null && existing.IsRunning &&
-            existing.MicDeviceId == MicDeviceId &&
-            existing.InjectionDeviceId == InjectionDeviceId)
+            existing.MicDeviceId     == MicDeviceId &&
+            existing.InjectionDeviceId == InjectionDeviceId &&
+            existing.ExternalDeviceId == ExternalAudioDeviceId)
         {
-            existing.MicVolume   = routeMic ? MicVolume : 0f;
-            existing.SoundVolume = InjectionVolume;
+            existing.MicVolume           = routeMic ? MicVolume : 0f;
+            existing.SoundVolume         = InjectionVolume;
+            existing.ExternalAudioVolume = ExternalAudioVolume;
             return;
         }
 
         existing?.Stop();
 
         var mixer = new MicPassthroughMixer(
-            micDeviceId:        routeMic ? MicDeviceId : null,
-            injectionDeviceId:  InjectionDeviceId,
-            externalDeviceId:   routeExternal ? ExternalAudioDeviceId : null,
-            micVolume:          routeMic ? MicVolume : 0f,
+            micDeviceId:         routeMic      ? MicDeviceId           : null,
+            injectionDeviceId:   InjectionDeviceId,
+            externalDeviceId:    routeExternal ? ExternalAudioDeviceId : null,
+            micVolume:           routeMic      ? MicVolume             : 0f,
             externalAudioVolume: ExternalAudioVolume,
-            soundVolume:        InjectionVolume);
+            soundVolume:         InjectionVolume);
 
         mixer.Start();
         lock (_lock) _micMixer = mixer;
@@ -196,16 +243,13 @@ public sealed class AudioHandler : IDisposable
         lock (_lock) { prev = _active; _active = null; }
         prev?.Stop();
 
-        MicPassthroughMixer? mixer;
-        lock (_lock) mixer = _micMixer;
-
         var playback = new ActivePlayback(
-            filePath:         filePath,
-            monitorDeviceId:  MonitorDeviceId,
+            filePath:          filePath,
+            monitorDeviceId:   MonitorDeviceId,
             injectionDeviceId: InjectionDeviceId,
-            monitorVolume:    MonitorVolume,
-            injectionVolume:  InjectionVolume,
-            startSeconds:     startSeconds,
+            monitorVolume:     MonitorVolume,
+            injectionVolume:   InjectionVolume,
+            startSeconds:      startSeconds,
             onFinished: (status, err) =>
             {
                 lock (_lock) { if (_active?.IsRunning == false) _active = null; }
@@ -363,6 +407,9 @@ internal sealed class MicPassthroughMixer
     private VolumeSampleProvider? _micVolProv;
     private VolumeSampleProvider? _extVolProv;
 
+    // Resampler for loopback → mixer format conversion
+    private WaveFormat? _mixerFormat;
+
     public MicPassthroughMixer(string? micDeviceId, string? injectionDeviceId,
                                 string? externalDeviceId, float micVolume,
                                 float externalAudioVolume, float soundVolume)
@@ -375,47 +422,155 @@ internal sealed class MicPassthroughMixer
         SoundVolume         = soundVolume;
     }
 
+    private static string RealId(string id) =>
+        id.StartsWith("loopback:") ? id["loopback:".Length..] : id;
+
     public void Start()
     {
         var enumerator = new MMDeviceEnumerator();
-        var waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
 
-        _micBuffer      = new BufferedWaveProvider(waveFormat) { DiscardOnBufferOverflow = true };
-        _externalBuffer = new BufferedWaveProvider(waveFormat) { DiscardOnBufferOverflow = true };
+        // ── Pick a common mixer format based on what's available ─────────────
+        // Use the injection device's mix format as the master
+        var injDev = enumerator.GetDevice(RealId(InjectionDeviceId!));
+        var injFmt = injDev.AudioClient.MixFormat;
+        _mixerFormat = WaveFormat.CreateIeeeFloatWaveFormat(
+            injFmt.SampleRate, Math.Min(2, injFmt.Channels));
+
+        _micBuffer      = new BufferedWaveProvider(_mixerFormat) { DiscardOnBufferOverflow = true, BufferDuration = TimeSpan.FromSeconds(2) };
+        _externalBuffer = new BufferedWaveProvider(_mixerFormat) { DiscardOnBufferOverflow = true, BufferDuration = TimeSpan.FromSeconds(2) };
         _micVolProv     = new VolumeSampleProvider(_micBuffer.ToSampleProvider());
         _extVolProv     = new VolumeSampleProvider(_externalBuffer.ToSampleProvider());
-        _mixer          = new MixingSampleProvider(waveFormat) { ReadFully = true };
+        _mixer          = new MixingSampleProvider(_mixerFormat) { ReadFully = true };
 
+        // ── Mic capture ──────────────────────────────────────────────────────
         if (MicDeviceId != null)
         {
-            _micCapture = new WasapiCapture(enumerator.GetDevice(MicDeviceId));
+            var micDevice = enumerator.GetDevice(RealId(MicDeviceId));
+            _micCapture = new WasapiCapture(micDevice);
+            // Force the capture format to match our mixer so no conversion needed
+            _micCapture.WaveFormat = _mixerFormat;
             _micCapture.DataAvailable += (_, e) =>
             {
+                if (e.BytesRecorded == 0) return;
                 _micVolProv.Volume = MicVolume;
                 _micBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
             };
             _mixer.AddMixerInput(_micVolProv);
         }
 
+        // ── Loopback capture (system/app audio) ──────────────────────────────
         if (ExternalDeviceId != null)
         {
-            var extDevice = enumerator.GetDevice(ExternalDeviceId);
+            var extDevice = enumerator.GetDevice(RealId(ExternalDeviceId));
             _loopbackCapture = new WasapiLoopbackCapture(extDevice);
+            // Loopback format is whatever the render device uses — may differ
+            var loopbackFmt = _loopbackCapture.WaveFormat;
+
             _loopbackCapture.DataAvailable += (_, e) =>
             {
+                if (e.BytesRecorded == 0) return;
+
+                byte[] converted;
+                if (loopbackFmt.Equals(_mixerFormat))
+                {
+                    // Same format — copy directly
+                    converted = e.Buffer[..e.BytesRecorded];
+                }
+                else
+                {
+                    // Resample: float32 loopback → float32 mixer format
+                    converted = ResampleFloat(e.Buffer, e.BytesRecorded,
+                                              loopbackFmt, _mixerFormat);
+                }
+
+                if (converted.Length == 0) return;
                 _extVolProv.Volume = ExternalAudioVolume;
-                _externalBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
+                _externalBuffer.AddSamples(converted, 0, converted.Length);
             };
+
             _mixer.AddMixerInput(_extVolProv);
             _loopbackCapture.StartRecording();
         }
 
-        var injectionDevice = enumerator.GetDevice(InjectionDeviceId!);
-        _injectionOut = new WasapiOut(injectionDevice, AudioClientShareMode.Shared, true, 50);
+        // ── Injection output ─────────────────────────────────────────────────
+        _injectionOut = new WasapiOut(injDev, AudioClientShareMode.Shared, true, 50);
         _injectionOut.Init(_mixer);
         _micCapture?.StartRecording();
         _injectionOut.Play();
         IsRunning = true;
+    }
+
+    /// <summary>
+    /// Resample raw IEEE float bytes from <paramref name="src"/> format to
+    /// <paramref name="dst"/> format using NAudio's MediaFoundation resampler.
+    /// Falls back to a simple channel/sample-rate conversion if MF is unavailable.
+    /// </summary>
+    private static byte[] ResampleFloat(byte[] buffer, int count,
+                                         WaveFormat src, WaveFormat dst)
+    {
+        try
+        {
+            using var ms  = new MemoryStream(buffer, 0, count);
+            using var raw = new RawSourceWaveStream(ms, src);
+
+            // Convert to PCM16 first if needed (MF resampler works best with PCM)
+            ISampleProvider sp = raw.ToSampleProvider();
+
+            // Handle channel count mismatch
+            if (src.Channels == 1 && dst.Channels == 2)
+                sp = new MonoToStereoSampleProvider(sp);
+            else if (src.Channels == 2 && dst.Channels == 1)
+                sp = new StereoToMonoSampleProvider(sp);
+
+            // Handle sample rate mismatch using MediaFoundation
+            if (src.SampleRate != dst.SampleRate)
+            {
+                var pcm16 = sp.ToWaveProvider16();
+                var pcmDst = new WaveFormat(dst.SampleRate, 16, dst.Channels);
+                using var resampled = new MediaFoundationResampler(pcm16, pcmDst);
+                resampled.ResamplerQuality = 60;
+                using var outMs = new MemoryStream();
+                var tmp = new byte[4096];
+                int read;
+                while ((read = resampled.Read(tmp, 0, tmp.Length)) > 0)
+                    outMs.Write(tmp, 0, read);
+
+                // Convert back to float32
+                var pcmBytes = outMs.ToArray();
+                var floatBytes = new byte[pcmBytes.Length * 2]; // 16bit → 32bit float
+                using var pcmMs    = new MemoryStream(pcmBytes);
+                using var pcmWave  = new RawSourceWaveStream(pcmMs, pcmDst);
+                using var floatOut = new MemoryStream();
+                var floatSp = pcmWave.ToSampleProvider();
+                var floatBuf = new float[1024];
+                int fread;
+                while ((fread = floatSp.Read(floatBuf, 0, floatBuf.Length)) > 0)
+                {
+                    var bytes = new byte[fread * 4];
+                    Buffer.BlockCopy(floatBuf, 0, bytes, 0, bytes.Length);
+                    floatOut.Write(bytes, 0, bytes.Length);
+                }
+                return floatOut.ToArray();
+            }
+            else
+            {
+                // Same sample rate — just convert channels, output as float
+                using var outMs = new MemoryStream();
+                var floatBuf = new float[1024];
+                int fread;
+                while ((fread = sp.Read(floatBuf, 0, floatBuf.Length)) > 0)
+                {
+                    var bytes = new byte[fread * 4];
+                    Buffer.BlockCopy(floatBuf, 0, bytes, 0, bytes.Length);
+                    outMs.Write(bytes, 0, bytes.Length);
+                }
+                return outMs.ToArray();
+            }
+        }
+        catch
+        {
+            return Array.Empty<byte>();
+        }
     }
 
     public void Stop()
