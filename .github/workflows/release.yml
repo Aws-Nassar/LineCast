@@ -14,6 +14,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
@@ -42,9 +44,27 @@ jobs:
           Write-Host "MicDeck.exe is $([math]::Round($file.Length / 1MB, 1)) MB"
 
       - name: Create release
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release create $env:GITHUB_REF_NAME dist/MicDeck.exe
-          --title "MicDeck $env:GITHUB_REF_NAME"
-          --generate-notes
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $prev = git describe --tags --abbrev=0 "$tag^" 2>$null
+
+          # The repo has no pull requests, so GitHub's generated notes would be
+          # nothing but a compare link. Build the list from the commit log.
+          if ($LASTEXITCODE -eq 0 -and $prev) {
+              $heading = "Changes since $prev"
+              $log = git log "$prev..$tag" --no-merges --pretty="- %s"
+          } else {
+              $heading = "First release"
+              $log = git log $tag --no-merges --pretty="- %s"
+          }
+
+          $notes = @"
+          $heading
+
+          $($log -join "`n")
+          "@
+          $notes | Out-File release-notes.md -Encoding utf8
+          gh release create $tag dist/MicDeck.exe --title "MicDeck $tag" --notes-file release-notes.md
