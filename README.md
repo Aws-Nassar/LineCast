@@ -67,11 +67,15 @@ VB-CABLE or another virtual audio cable
 
 ## Install
 
-MicDeck is not on a store and has no installer. Build it yourself (below), or
-grab `MicDeck.exe` from the artifacts of the latest
-[CI run](https://github.com/Aws-Nassar/MicDeck/actions/workflows/build.yml) —
-GitHub asks you to sign in before it hands out build artifacts. The exe is
-self-extracting and needs no installation: put it wherever you like.
+Download the latest build from
+[**Releases**](https://github.com/Aws-Nassar/MicDeck/releases/latest) and run
+`MicDeck.exe`. The asset is self-contained: it carries its own .NET runtime, so
+there is nothing else to install, no admin rights, and no setup wizard. Put it
+wherever you like.
+
+Prefer to build it yourself? See [Build from source](#build-from-source). Every
+push also uploads a smaller framework-dependent exe as a workflow artifact, but
+GitHub asks you to sign in before it hands those out.
 
 Then set up the routing once:
 
