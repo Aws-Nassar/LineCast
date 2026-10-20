@@ -1,0 +1,44 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ── Surfaces (dark) ───────────────────────────────────────────── -->
+    <SolidColorBrush x:Key="Bg.Window"     Color="#0B0E13" />
+    <SolidColorBrush x:Key="Bg.Surface"    Color="#12161D" />
+    <SolidColorBrush x:Key="Bg.SurfaceAlt" Color="#171C25" />
+    <SolidColorBrush x:Key="Bg.Elevated"   Color="#1D2431" />
+    <SolidColorBrush x:Key="Bg.Input"      Color="#0D1117" />
+    <SolidColorBrush x:Key="Bg.Hover"      Color="#222A37" />
+    <SolidColorBrush x:Key="Bg.Pressed"    Color="#2A3444" />
+
+    <!-- ── Lines ─────────────────────────────────────────────────────── -->
+    <SolidColorBrush x:Key="Border.Subtle" Color="#232A35" />
+    <SolidColorBrush x:Key="Border.Strong" Color="#333D4E" />
+    <SolidColorBrush x:Key="Border.Focus"  Color="#4A5A72" />
+
+    <!-- ── Text ──────────────────────────────────────────────────────── -->
+    <SolidColorBrush x:Key="Text.Primary"   Color="#E9EEF6" />
+    <SolidColorBrush x:Key="Text.Secondary" Color="#9AA7B8" />
+    <SolidColorBrush x:Key="Text.Muted"     Color="#66738A" />
+    <SolidColorBrush x:Key="Text.OnAccent"  Color="#08111C" />
+
+    <!-- ── Semantic ──────────────────────────────────────────────────── -->
+    <SolidColorBrush x:Key="Signal.Success" Color="#34D399" />
+    <SolidColorBrush x:Key="Signal.Warning" Color="#FBBF24" />
+    <SolidColorBrush x:Key="Signal.Danger"  Color="#F87171" />
+
+    <!-- ── Accent defaults (overridden at runtime by ThemeManager) ───── -->
+    <SolidColorBrush x:Key="Accent"         Color="#38BDF8" />
+    <SolidColorBrush x:Key="Accent.Hover"   Color="#5CCBFB" />
+    <SolidColorBrush x:Key="Accent.Pressed" Color="#0EA5E9" />
+    <SolidColorBrush x:Key="Accent.Soft"    Color="#2438BDF8" />
+    <SolidColorBrush x:Key="Accent.On"      Color="#08111C" />
+    <SolidColorBrush x:Key="Accent.Text"    Color="#38BDF8" />
+
+    <LinearGradientBrush x:Key="Meter.Gradient" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Offset="0.00" Color="#22D3A0" />
+        <GradientStop Offset="0.72" Color="#34D399" />
+        <GradientStop Offset="0.88" Color="#FBBF24" />
+        <GradientStop Offset="1.00" Color="#F87171" />
+    </LinearGradientBrush>
+
+</ResourceDictionary>
