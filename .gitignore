@@ -1,40 +1,44 @@
-# Python bytecode and caches
-__pycache__/
-*.py[cod]
-*$py.class
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
-
-# Build and packaging output
-build/
+# Build output
+bin/
+obj/
 dist/
-*.egg-info/
-*.spec
+artifacts/
+publish/
+[Dd]ebug/
+[Rr]elease/
+x86/
+x64/
+
+# Test and diagnostic output
+TestResults/
+BenchmarkDotNet.Artifacts/
+*.binlog
+*.trx
+*.coverage
+coverage.*.xml
+
+# IDE and editor files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.swp
+*.swo
+*~
 
 # Local runtime state
 config.json
-dist/config.json
 *.log
 *.tmp
-
-# Generated local artifacts
 *.wav.tmp
 *.mp3.tmp
-
-# IDE/editor files
-.idea/
-.vscode/
-*.swp
-*.swo
+error.log
 
 # OS files
 Thumbs.db
 Desktop.ini
+ehthumbs.db
 .DS_Store

@@ -1,266 +1,292 @@
 # LineCast
 
-LineCast is a Windows soundboard and mic mixer built with Python, PyQt5, and `sounddevice`. It lets you play MP3/WAV clips into meeting apps while still talking through your real microphone.
+**A soundboard and microphone mixer for Windows calls.** Play clips into a
+meeting while your real microphone keeps working, and optionally mix desktop
+audio in too.
 
-The intended routing is:
+[![build](https://github.com/Aws-Nassar/LineCast/actions/workflows/build.yml/badge.svg)](https://github.com/Aws-Nassar/LineCast/actions/workflows/build.yml)
+[![platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4?logo=windows&logoColor=white)](#requirements)
+[![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)](#build-from-source)
+[![license](https://img.shields.io/badge/license-MIT-3DA639)](LICENSE)
+
+![LineCast main window](docs/screenshots/01-library-dark.png)
+
+LineCast is a native WPF app with its own WASAPI audio engine. There is no
+Python runtime, no installer, and no unpacking on launch: it is one executable
+that opens in about a second and stays open.
+
+It works with anything that lets you choose a microphone: Discord, Zoom, Teams,
+Google Meet, Slack, OBS, Steam, and browser-based calls.
+
+## How it works
+
+LineCast takes over the microphone your call sees, and mixes your real
+microphone and its own clips into that single stream:
 
 ```text
-Your real mic + LineCast sounds -> CABLE Input -> CABLE Output -> meeting app microphone
-Meeting app audio -> your headphones/speakers
+your microphone ─┐
+LineCast clips ──┼─▶ CABLE Input ═══ CABLE Output ─▶ meeting app microphone
+desktop audio ───┘        ▲
+                          │
+              your headphones hear the same mix (optional)
 ```
 
-This works with apps that can choose a microphone device, including Discord, Zoom, Google Meet, Slack, Teams, and browser-based meeting apps.
+Install [VB-CABLE](https://vb-audio.com/Cable/), point LineCast at `CABLE Input`,
+and tell the meeting app to use `CABLE Output`. That is the whole trick.
 
 ## Features
 
-- Modern dark PyQt5 desktop GUI
-- Sound library table with search, rename, path change, and delete controls
-- Add MP3/WAV files
-- Review slider with time display for previewing and seeking inside clips
-- Monitor, mic input, and injection device selectors
-- Simplified recommended device list, with optional advanced devices
-- Separate monitor, mic, video/system, and sound injection volume controls
-- Mic passthrough/mixing into a virtual cable
-- Optional WASAPI loopback device/app audio input for browser, YouTube, VLC, or local media audio
-- Soundboard playback through `sounddevice`
-- Clip normalization through `pydub`
-- Per-user preference saving under Windows AppData
-- Custom app icon
-- Repeatable one-file `.exe` build script
+- **One continuous stream per output.** The soundboard, the microphone, and the
+  desktop capture are inputs to a mixer that owns a single WASAPI stream, so
+  starting or seeking a clip never reopens a device and never glitches.
+- **Global hotkeys.** Bind any sound to a combination, plus play, stop, and
+  microphone mute. They work while the call has focus. Conflicts are reported
+  instead of silently failing.
+- **Searchable library with waveforms.** Drag and drop files anywhere on the
+  window. Rename, relink, or remove entries without touching the audio files.
+- **Loudness-matched clips.** Every file is decoded once and normalised to about
+  −18 dBFS RMS with a −1.4 dBFS peak ceiling, then cached in memory.
+- **Drift-corrected capture.** Microphone and loopback audio are resampled by up
+  to ±1 percent to hold a target buffer fill, which stops the slow drift that
+  turns into clicks after a few minutes.
+- **Desktop audio.** Capture any playback device with WASAPI loopback and mix it
+  into the call. No "Stereo Mix" driver required.
+- **Dark and light themes, six accents**, applied instantly and remembered.
+- **Tray aware.** Minimise to tray or start there; the tray menu still plays,
+  stops, and mutes.
+- **Settings survive device changes.** Endpoints are stored as WASAPI ids, not
+  indexes, so plugging in a headset no longer scrambles your routing.
 
 ## Requirements
 
-- Windows
-- Python 3.10 or newer
-- FFmpeg installed and available on `PATH` for MP3 support
-- A virtual audio cable driver, such as VB-CABLE
-
-Install Python packages:
-
-```powershell
-python -m pip install PyQt5 sounddevice pydub numpy audioop-lts pyinstaller PyAudioWPatch
+```text
+Windows 10 (1809 or newer) or Windows 11, 64-bit
+.NET 10 Desktop Runtime, unless you use the self-contained build
+VB-CABLE or another virtual audio cable
 ```
 
-`audioop-lts` is needed on Python 3.13+ because Python removed the old standard-library `audioop` module.
+## Install
 
-## Quick Start
+LineCast is not on a store and has no installer. Either build it yourself
+(below) or download `LineCast.exe` from the artifacts of the latest
+[CI run](https://github.com/Aws-Nassar/LineCast/actions/workflows/build.yml).
+The exe is self-extracting and needs no installation: put it wherever you like.
 
-Run from the project folder:
+Then set up the routing once:
 
-```powershell
-python main.py
-```
+1. Install **VB-CABLE** and reboot if the installer asks.
+2. Start LineCast.
+3. Set **Virtual cable in** to `CABLE Input (VB-Audio Virtual Cable)`.
+4. Set **Microphone** to your real microphone, never to `CABLE Output`.
+5. Set **Monitor** to your headphones or speakers.
+6. In the meeting app, choose `CABLE Output (VB-Audio Virtual Cable)` as the
+   microphone, and your headphones as the speaker.
 
-Then choose:
+The status bar tells you when routing is not pointing at a cable device, rather
+than letting you discover it when nobody can hear you.
+
+| Setting | Meaning |
+| --- | --- |
+| Virtual cable in | Where LineCast sends audio. Use `CABLE Input`. |
+| Microphone | Your real microphone, mixed into the cable. |
+| Monitor | The device you personally hear clips on. |
+| Desktop audio | A playback device whose audio is captured and mixed in. |
+
+## Screenshots
+
+**Playing a clip.** The row highlights, the transport tracks position, and the
+cable meter shows what the call is receiving.
+
+![Playing](docs/screenshots/02-playing.png)
+
+**Settings.** Appearance, hotkeys, buffer latency, and system behaviour all live
+in one panel.
+
+![Settings](docs/screenshots/03-settings.png)
+
+**Light theme, violet accent.** Themes and accents swap at runtime, including
+the window chrome.
+
+![Light theme](docs/screenshots/04-light.png)
+
+## Using sounds
+
+- **Add sounds**, or drop audio files on the window. Anything Windows Media
+  Foundation decodes works: WAV, MP3, M4A/AAC, WMA, and usually FLAC and OGG.
+- Double-click a row to play it, or select it and press `Space`.
+- Seek with the slider under the transport bar, even while a clip is playing.
+- `✎` renames a sound, `✕` removes it from the library. The audio file itself is
+  never deleted.
+- If a file moves, the row shows `!`; double-click it to relink it. LineCast then
+  remembers the new path.
+
+## Hotkeys
+
+Hotkeys are real global hotkeys, registered with the OS, so they work while the
+meeting app has focus. Defaults:
+
+| Keys | Action |
+| --- | --- |
+| `F8` | Play the selected sound |
+| `F9` | Stop playback |
+| `F10` | Toggle the microphone |
+| `Space` | Play or stop the selected sound (window focused) |
+| `Del` | Remove the selected sound from the library |
+
+Each sound can have its own hotkey: open **Settings → Hotkeys**, click a box,
+and press the combination. Function keys work alone; letter and number keys need
+at least one modifier. `Backspace` clears a binding. A combination another
+application already owns shows a warning badge on the sound row.
+
+## Themes
+
+**Settings → Appearance** switches between the dark and light palettes and six
+accent colours. Both apply immediately, without a restart, and the title bar
+follows the theme.
+
+Other settings:
+
+| Setting | What it does |
+| --- | --- |
+| Buffer latency | 10–120 ms. Lower feels tighter; raise it on a busy machine. |
+| Show virtual and unused devices | Lists endpoints that do not look useful by default. |
+| Minimize to tray | Keeps hotkeys alive with the window hidden. |
+| Start minimized | Launches straight to the tray. |
+
+## Where settings live
 
 ```text
-Monitor Device = your headphones/speakers
-Mic Input = your real microphone
-Injection Device = CABLE Input (VB-Audio Virtual Cable)
-Mix mic into virtual input = ON
-Mix device/app audio into virtual input = OFF until you need it
+%APPDATA%\LineCast\settings.json
 ```
 
-In Discord, Zoom, Meet, Slack, Teams, or another meeting app:
+The file is written atomically and debounced, so a crash cannot leave a
+half-written settings file behind. A corrupt file is backed up next to it and
+LineCast starts with defaults instead of an empty library.
+
+If a `config.json` from the old Python build is present in the same folder, its
+sound list is imported on first run. Device indexes from that version are
+deliberately dropped because they are not stable across device changes.
+
+## How the audio engine works
 
 ```text
-Microphone/Input = CABLE Output (VB-Audio Virtual Cable)
-Speaker/Output = your headphones/speakers
+ClipCache ─┐
+Mic ───────┼─▶ AudioBus (mixer + limiter) ─▶ WasapiOut ─▶ device
+Loopback ──┘          ▲
+                      └── meter
 ```
 
-Keep LineCast open while using the meeting app. LineCast is acting as the mixer that forwards your real mic plus soundboard clips into the virtual microphone.
+Each output bus owns one `WasapiOut` stream and one mixer. Because clips are
+mixer inputs rather than device owners, the device is opened once and stays open
+for the life of the app.
 
-LineCast remembers your selected devices, volumes, and sound list between runs.
-
-## Device Setup
-
-LineCast shows a simplified recommended device list by default. Turn on `Show advanced audio devices` only if you need to see every Windows/PortAudio backend entry.
-
-For normal use, prefer `WASAPI` devices when available.
-
-Common device meanings:
-
-```text
-CABLE Input = where LineCast sends audio
-CABLE Output = what meeting apps use as the microphone
-Mic Input = your real microphone, never CABLE Output
-Monitor Device = where you personally hear the soundboard
-```
-
-Avoid these selections:
-
-```text
-LineCast Mic Input = CABLE Output
-LineCast Mic Input = Stereo Mix
-LineCast Injection Device = CABLE In 16ch
-Meeting app Speaker/Output = CABLE Input or CABLE Output
-```
-
-The duplicate-looking advanced device names come from Windows exposing the same hardware through different audio APIs:
-
-```text
-MME = old Windows audio
-DirectSound = older game/media audio
-WASAPI = modern Windows audio, usually best
-WDM-KS = low-level driver access, can be unstable or confusing
-```
-
-## Using Sounds
-
-1. Click `Add Sounds`.
-2. Choose one or more `.mp3` or `.wav` files.
-3. Select a sound in the table.
-4. Use the `Review` slider to preview position and seek while a clip is playing.
-5. Click `Play`.
-
-Double-clicking a row also plays it. Use `Rename`, `Change Path`, and `Delete` to manage the selected sound. `Delete` removes it from the LineCast library only; it does not delete the audio file from disk.
-
-Volume controls:
-
-```text
-Monitor Volume = how loud the clip is for you
-Mic Volume = how loud your voice is in the virtual microphone
-Device/App Volume = how loud captured browser/video audio is for meeting apps
-Sound Injection Volume = how loud the clip is for meeting apps
-```
-
-## Browser, YouTube, And Local Video Audio
-
-LineCast can mix audio playing on a Windows output device into the same virtual microphone. This uses WASAPI loopback through `PyAudioWPatch`, not `Stereo Mix`. It is useful when you need meeting participants to hear a YouTube video, browser tab, VLC video, or local media that you cannot download.
-
-Recommended safe setup:
-
-```text
-LineCast Mic Input = your real microphone
-LineCast Device/App Audio Source = Speakers (Realtek(R) Audio) -> device/app audio
-LineCast Injection Device = CABLE Input
-Meeting app Microphone/Input = CABLE Output
-Meeting app Speaker/Output = headphones or another device you are NOT capturing
-```
-
-Turn on:
-
-```text
-Mix device/app audio into virtual input = ON
-```
-
-If you want YouTube/browser audio captured, make that app play through the same output device selected as `Device/App Audio Source`. For example, if LineCast captures `Speakers (Realtek(R) Audio)`, set the browser output to `Speakers (Realtek(R) Audio)` in Windows volume mixer.
-
-Avoid capturing the meeting app's own speaker output. If Discord, Zoom, Meet, Slack, or Teams plays through the same device you are capturing, its sounds can loop back into the meeting microphone.
-
-## Build The EXE
-
-Generate the icon assets if needed:
-
-```powershell
-python tools\generate_icon.py
-```
-
-Build the runnable one-file app:
-
-```powershell
-.\tools\build_exe.ps1
-```
-
-The executable is created at:
-
-```text
-dist\LineCast.exe
-```
-
-The one-file build is easiest to share, but it starts slower because PyInstaller unpacks the app to a temporary folder every time it launches. For faster startup, build the folder version:
-
-```powershell
-.\tools\build_exe.ps1 -Mode OneDir
-```
-
-That creates:
-
-```text
-dist\LineCast\LineCast.exe
-```
-
-Ship the whole `dist\LineCast` folder if you use this mode.
-
-FFmpeg still needs to be installed on the target PC for MP3 support.
-
-The `.exe` stores user settings here:
-
-```text
-%APPDATA%\LineCast\config.json
-```
-
-That file is created automatically on each PC. Do not ship your personal `config.json` with the app.
-
-## Backend Diagnostics
-
-List available input and output devices:
-
-```powershell
-python audio_handler.py
-```
-
-or:
-
-```powershell
-python audio_handler.py --list-devices
-```
-
-Test one clip without the GUI:
-
-```powershell
-python audio_handler.py --file path\to\clip.wav --monitor 19 --injection 14
-```
-
-Use the device indexes printed by the diagnostics command. The numbers above are only an example.
+- **Clock alignment.** The monitor and cable buses release a clip at the same
+  `Stopwatch` timestamp with a 30 ms lead, so two devices with independent clocks
+  still hear it together.
+- **Capture drift.** A ring buffer resamples by up to ±1 percent to hold a target
+  fill level. Without it, mismatched clocks slowly drain or overflow the buffer
+  until the audio clicks.
+- **No per-callback allocation.** Providers are pooled and reused; the render
+  callback only copies floats, so the GC never runs in the audio thread.
+- **Seeking is instant.** A seek restarts an in-memory clip source at a sample
+  offset; nothing is decoded twice.
+- **Stable routing.** Endpoints are identified by WASAPI id, so a USB headset
+  coming and going cannot silently point your microphone at the wrong device.
 
 ## Troubleshooting
 
-If the meeting app detects no mic input:
+**The meeting app hears nothing.**
 
-1. Make sure LineCast is open.
-2. Make sure `Mix mic into virtual input` is ON.
-3. Make sure LineCast `Mic Input` is your real microphone.
-4. Make sure LineCast `Injection Device` is `CABLE Input`.
-5. Make sure the meeting app microphone is `CABLE Output`.
-6. Toggle `Mix mic into virtual input` off and on once.
+1. Check that **Virtual cable in** is `CABLE Input`, not your speakers.
+2. Check that the meeting app's microphone is `CABLE Output`.
+3. Check that **Microphone** is your real mic and that the mic switch is on.
+4. Watch the meters: the mic meter should move when you speak, and the cable
+   meter when a clip plays.
 
-If the meeting app does not hear browser/video audio:
+**Clips stutter or drop out.**
 
-1. Make sure `Mix device/app audio into virtual input` is ON.
-2. Select `Stereo Mix` or another real capture source as `Device/App Audio Source`.
-3. Make sure the browser or video player is outputting to the device that source captures.
-4. Try playing audio before starting the meeting-app mic test.
+1. Raise **Buffer latency** in Settings.
+2. Close applications holding the same device in exclusive mode.
+3. Make sure monitor and cable are different endpoints.
 
-If you hear a join/leave sound or meeting audio looping:
+**A hotkey does nothing.**
 
-1. In the meeting app, set speaker/output directly to your headphones.
-2. Do not use `Windows Default` while testing.
-3. Do not set the meeting app speaker/output to any cable device.
-4. Do not set LineCast Mic Input to `CABLE Output` or `Stereo Mix`.
-5. If video/system audio capture is enabled, make sure it is not capturing the meeting app speaker/output.
+1. Open **Settings → Hotkeys** and look for a warning badge on the sound row.
+2. Another application already owns the combination; pick another.
 
-If MP3 files fail to load, install FFmpeg and confirm it is on `PATH`:
-
-```powershell
-ffmpeg -version
-```
-
-## Project Structure
+**Something crashed.** An error log is written to:
 
 ```text
-LineCast/
-  main.py              PyQt5 GUI and app-level logic
-  audio_handler.py     Mic mixing, playback, normalization, device listing
-  assets/              App icon assets
-  tools/
-    build_exe.ps1      PyInstaller build script
-    generate_icon.py   Rebuilds app icon assets
-  config.json          Optional legacy local config; new saves use AppData
+%APPDATA%\LineCast\error.log
 ```
 
-## Planned Next
+## Build from source
 
-- Global hotkeys with `pynput`
-- Auto-PTT key press/release with `pyautogui`
-- Sound removal/editing from the library
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+
+```powershell
+git clone https://github.com/Aws-Nassar/LineCast.git
+cd LineCast
+dotnet build LineCast.sln -c Release
+```
+
+The app lands in:
+
+```text
+src\LineCast\bin\x64\Release\net10.0-windows\LineCast.exe
+```
+
+The helper script does the same thing, plus publishing:
+
+```powershell
+.\tools\build.ps1                 # Release build
+.\tools\build.ps1 -Publish        # single-file, ReadyToRun -> dist\LineCast.exe
+```
+
+If PowerShell refuses to run the script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build.ps1 -Publish
+```
+
+`-Publish` produces one self-extracting file, ReadyToRun compiled. ReadyToRun
+matters here: it removes roughly a second of JIT time from a cold start.
+
+To bundle the .NET runtime so the exe runs on machines that have never seen the
+SDK:
+
+```powershell
+.\tools\build.ps1 -Publish -SelfContained
+```
+
+Ship `dist\LineCast.exe` and nothing else in either case.
+
+## Project layout
+
+```text
+LineCast.sln                 solution root
+src/LineCast/
+  App.xaml(.cs)              bootstrap, single instance, tray, deferred startup
+  LineCast.csproj            net10.0-windows, WPF + WinForms (tray only), NAudio
+  Audio/
+    AudioEngine.cs           buses, routing, transport
+    AudioBus.cs              one WASAPI output stream and its mixer
+    SampleProviders.cs       mixer, limiter, meter, clip player, channel map
+    AdaptiveBuffer.cs        drift-correcting ring buffer
+    CaptureConverter.cs      PCM conversion and downmix
+    ClipCache.cs             decode once, normalise, LRU cache, waveforms
+    AudioDeviceInfo.cs       WASAPI endpoint enumeration
+  Configuration/             settings model, atomic store, v1 migration
+  Controls/                  waveform and level-meter renderers
+  Services/                  theme manager, global hotkeys, tray icon
+  ViewModels/                main view model, sound rows, commands
+  Views/                     main window, rename prompt
+  Themes/                    dark and light palettes, control styles
+docs/screenshots/            README images
+tools/build.ps1              build and publish helper
+.github/workflows/build.yml  CI: build on every push, upload the exe
+```
+
+## License
+
+[MIT](LICENSE)

@@ -694,6 +694,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <Grid Margin="22,18,16,10">
@@ -825,12 +826,13 @@
                                     Click="OnOpenSettingsFolder"
                                     HorizontalAlignment="Left"
                                     Margin="0,18,0,0" />
-
-                            <TextBlock Text="LineCast 2.0 · WASAPI shared mode"
-                                       Style="{StaticResource Caption}"
-                                       Margin="0,18,0,0" />
                         </StackPanel>
                     </ScrollViewer>
+
+                    <TextBlock Grid.Row="2"
+                               Text="LineCast 2.0 · WASAPI shared mode"
+                               Style="{StaticResource Caption}"
+                               Margin="22,0,22,18" />
                 </Grid>
             </Border>
         </Grid>
