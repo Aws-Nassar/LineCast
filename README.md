@@ -1,17 +1,17 @@
-# LineCast
+# MicDeck
 
 **A soundboard and microphone mixer for Windows calls.** Play clips into a
 meeting while your real microphone keeps working, and optionally mix desktop
 audio in too.
 
-[![build](https://github.com/Aws-Nassar/LineCast/actions/workflows/build.yml/badge.svg)](https://github.com/Aws-Nassar/LineCast/actions/workflows/build.yml)
+[![build](https://github.com/Aws-Nassar/MicDeck/actions/workflows/build.yml/badge.svg)](https://github.com/Aws-Nassar/MicDeck/actions/workflows/build.yml)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4?logo=windows&logoColor=white)](#requirements)
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)](#build-from-source)
 [![license](https://img.shields.io/badge/license-MIT-3DA639)](LICENSE)
 
-![LineCast main window](docs/screenshots/01-library-dark.png)
+![MicDeck main window](docs/screenshots/01-library-dark.png)
 
-LineCast is a native WPF app with its own WASAPI audio engine. There is no
+MicDeck is a native WPF app with its own WASAPI audio engine. There is no
 Python runtime, no installer, and no unpacking on launch: it is one executable
 that opens in about a second and stays open.
 
@@ -20,18 +20,18 @@ Google Meet, Slack, OBS, Steam, and browser-based calls.
 
 ## How it works
 
-LineCast takes over the microphone your call sees, and mixes your real
+MicDeck takes over the microphone your call sees, and mixes your real
 microphone and its own clips into that single stream:
 
 ```text
 your microphone ─┐
-LineCast clips ──┼─▶ CABLE Input ═══ CABLE Output ─▶ meeting app microphone
+MicDeck clips ──┼─▶ CABLE Input ═══ CABLE Output ─▶ meeting app microphone
 desktop audio ───┘        ▲
                           │
               your headphones hear the same mix (optional)
 ```
 
-Install [VB-CABLE](https://vb-audio.com/Cable/), point LineCast at `CABLE Input`,
+Install [VB-CABLE](https://vb-audio.com/Cable/), point MicDeck at `CABLE Input`,
 and tell the meeting app to use `CABLE Output`. That is the whole trick.
 
 ## Features
@@ -67,16 +67,16 @@ VB-CABLE or another virtual audio cable
 
 ## Install
 
-LineCast is not on a store and has no installer. Build it yourself (below), or
-grab `LineCast.exe` from the artifacts of the latest
-[CI run](https://github.com/Aws-Nassar/LineCast/actions/workflows/build.yml) —
+MicDeck is not on a store and has no installer. Build it yourself (below), or
+grab `MicDeck.exe` from the artifacts of the latest
+[CI run](https://github.com/Aws-Nassar/MicDeck/actions/workflows/build.yml) —
 GitHub asks you to sign in before it hands out build artifacts. The exe is
 self-extracting and needs no installation: put it wherever you like.
 
 Then set up the routing once:
 
 1. Install **VB-CABLE** and reboot if the installer asks.
-2. Start LineCast.
+2. Start MicDeck.
 3. Set **Virtual cable in** to `CABLE Input (VB-Audio Virtual Cable)`.
 4. Set **Microphone** to your real microphone, never to `CABLE Output`.
 5. Set **Monitor** to your headphones or speakers.
@@ -88,7 +88,7 @@ than letting you discover it when nobody can hear you.
 
 | Setting | Meaning |
 | --- | --- |
-| Virtual cable in | Where LineCast sends audio. Use `CABLE Input`. |
+| Virtual cable in | Where MicDeck sends audio. Use `CABLE Input`. |
 | Microphone | Your real microphone, mixed into the cable. |
 | Monitor | The device you personally hear clips on. |
 | Desktop audio | A playback device whose audio is captured and mixed in. |
@@ -118,7 +118,7 @@ the window chrome.
 - Seek with the slider under the transport bar, even while a clip is playing.
 - `✎` renames a sound, `✕` removes it from the library. The audio file itself is
   never deleted.
-- If a file moves, the row shows `!`; double-click it to relink it. LineCast then
+- If a file moves, the row shows `!`; double-click it to relink it. MicDeck then
   remembers the new path.
 
 ## Hotkeys
@@ -157,16 +157,20 @@ Other settings:
 ## Where settings live
 
 ```text
-%APPDATA%\LineCast\settings.json
+%APPDATA%\MicDeck\settings.json
 ```
 
 The file is written atomically and debounced, so a crash cannot leave a
 half-written settings file behind. A corrupt file is backed up next to it and
-LineCast starts with defaults instead of an empty library.
+MicDeck starts with defaults instead of an empty library.
 
 If a `config.json` from the old Python build is present in the same folder, its
 sound list is imported on first run. Device indexes from that version are
 deliberately dropped because they are not stable across device changes.
+
+MicDeck used to be called LineCast. If `%APPDATA%\LineCast\settings.json` exists
+and the new folder is empty, it is adopted on first launch rather than starting
+you with an empty library.
 
 ## How the audio engine works
 
@@ -218,7 +222,7 @@ for the life of the app.
 **Something crashed.** An error log is written to:
 
 ```text
-%APPDATA%\LineCast\error.log
+%APPDATA%\MicDeck\error.log
 ```
 
 ## Build from source
@@ -226,22 +230,22 @@ for the life of the app.
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
 ```powershell
-git clone https://github.com/Aws-Nassar/LineCast.git
-cd LineCast
-dotnet build LineCast.sln -c Release
+git clone https://github.com/Aws-Nassar/MicDeck.git
+cd MicDeck
+dotnet build MicDeck.sln -c Release
 ```
 
 The app lands in:
 
 ```text
-src\LineCast\bin\x64\Release\net10.0-windows\LineCast.exe
+src\MicDeck\bin\x64\Release\net10.0-windows\MicDeck.exe
 ```
 
 The helper script does the same thing, plus publishing:
 
 ```powershell
 .\tools\build.ps1                 # Release build
-.\tools\build.ps1 -Publish        # single-file, ReadyToRun -> dist\LineCast.exe
+.\tools\build.ps1 -Publish        # single-file, ReadyToRun -> dist\MicDeck.exe
 ```
 
 If PowerShell refuses to run the script:
@@ -260,15 +264,15 @@ SDK:
 .\tools\build.ps1 -Publish -SelfContained
 ```
 
-Ship `dist\LineCast.exe` and nothing else in either case.
+Ship `dist\MicDeck.exe` and nothing else in either case.
 
 ## Project layout
 
 ```text
-LineCast.sln                 solution root
-src/LineCast/
+MicDeck.sln                 solution root
+src/MicDeck/
   App.xaml(.cs)              bootstrap, single instance, tray, deferred startup
-  LineCast.csproj            net10.0-windows, WPF + WinForms (tray only), NAudio
+  MicDeck.csproj            net10.0-windows, WPF + WinForms (tray only), NAudio
   Audio/
     AudioEngine.cs           buses, routing, transport
     AudioBus.cs              one WASAPI output stream and its mixer

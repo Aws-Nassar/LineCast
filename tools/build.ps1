@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Builds or publishes the LineCast WPF app.
+    Builds or publishes the MicDeck WPF app.
 
 .EXAMPLE
     .\tools\build.ps1
-    Builds a Release binary into src\LineCast\bin\x64\Release\net10.0-windows\.
+    Builds a Release binary into src\MicDeck\bin\x64\Release\net10.0-windows\.
 
 .EXAMPLE
     .\tools\build.ps1 -Publish
@@ -27,8 +27,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
-$project = Join-Path $root 'src\LineCast\LineCast.csproj'
-$solution = Join-Path $root 'LineCast.sln'
+$project = Join-Path $root 'src\MicDeck\MicDeck.csproj'
+$solution = Join-Path $root 'MicDeck.sln'
 
 if (-not (Test-Path $project)) {
     throw "Project not found: $project"
@@ -49,21 +49,21 @@ if ($Publish) {
         '-o', $out
     )
 
-    Write-Host "Publishing LineCast ($Configuration, self-contained=$($SelfContained.IsPresent))..." -ForegroundColor Cyan
+    Write-Host "Publishing MicDeck ($Configuration, self-contained=$($SelfContained.IsPresent))..." -ForegroundColor Cyan
     & dotnet @arguments
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet publish failed with exit code $LASTEXITCODE."
     }
 
-    Write-Host "Done: $out\LineCast.exe" -ForegroundColor Green
+    Write-Host "Done: $out\MicDeck.exe" -ForegroundColor Green
 }
 else {
-    Write-Host "Building LineCast ($Configuration)..." -ForegroundColor Cyan
+    Write-Host "Building MicDeck ($Configuration)..." -ForegroundColor Cyan
     $target = if (Test-Path $solution) { $solution } else { $project }
     & dotnet build $target -c $Configuration
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet build failed with exit code $LASTEXITCODE."
     }
 
-    Write-Host "Done: src\LineCast\bin\x64\$Configuration\net10.0-windows\LineCast.exe" -ForegroundColor Green
+    Write-Host "Done: src\MicDeck\bin\x64\$Configuration\net10.0-windows\MicDeck.exe" -ForegroundColor Green
 }
