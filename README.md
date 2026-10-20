@@ -67,10 +67,11 @@ VB-CABLE or another virtual audio cable
 
 ## Install
 
-LineCast is not on a store and has no installer. Either build it yourself
-(below) or download `LineCast.exe` from the artifacts of the latest
-[CI run](https://github.com/Aws-Nassar/LineCast/actions/workflows/build.yml).
-The exe is self-extracting and needs no installation: put it wherever you like.
+LineCast is not on a store and has no installer. Build it yourself (below), or
+grab `LineCast.exe` from the artifacts of the latest
+[CI run](https://github.com/Aws-Nassar/LineCast/actions/workflows/build.yml) —
+GitHub asks you to sign in before it hands out build artifacts. The exe is
+self-extracting and needs no installation: put it wherever you like.
 
 Then set up the routing once:
 
